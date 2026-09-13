@@ -125,13 +125,23 @@ class PipelinePublisher:
             pass
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def read_health(runtime_dir: "str | None" = None) -> "dict | None":
     """Used by the API. None when the pipeline has never published; otherwise
     the last snapshot plus `running` and `ageSeconds`.
 
-    `running` relies on a fresh timestamp (updated every second). If the
-    pipeline is SIGKILLed, the dashboard will see a frozen frame for up to
-    HEALTH_STALE_SECONDS before it falls back to a preview.
+    `running` relies on a fresh timestamp (updated every second) AND that the
+    publishing PID is still alive. If the pipeline is SIGKILLed, the dashboard
+    immediately falls back rather than showing a frozen frame.
     """
     try:
         with open(health_path(runtime_dir)) as f:
@@ -142,5 +152,14 @@ def read_health(runtime_dir: "str | None" = None) -> "dict | None":
         return None
     age = time.time() - float(data.get("updatedAt") or 0)
     data["ageSeconds"] = round(age, 1)
-    data["running"] = age <= HEALTH_STALE_SECONDS
+    running = age <= HEALTH_STALE_SECONDS
+    pid = data.get("pid")
+    if pid is not None:
+        try:
+            if not _pid_alive(int(pid)):
+                running = False
+        except (ValueError, TypeError):
+            pass
+    data["running"] = running
     return data
+

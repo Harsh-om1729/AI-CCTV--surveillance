@@ -109,6 +109,7 @@ class CameraStream:
             self._set_health(CameraHealth.OFFLINE, "producer thread aborted")
             log.exception("[%s] camera producer thread aborted", self.name)
         finally:
+            self._camera.release()
             self._drain_queue()
 
     def _capture_until_failure(self) -> None:

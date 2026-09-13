@@ -12,20 +12,32 @@ interface TopbarProps {
 
 const routeTitles: Record<string, { title: string; subtitle: string }> = {
   '/': {
-    title: 'Surveillance Dashboard',
-    subtitle: 'Real-time border situational overview & critical alerts',
+    title: 'Overview',
+    subtitle: 'System status, camera health, and active alerts at a glance',
   },
   '/live': {
-    title: 'Live Camera Feeds',
+    title: 'Live Surveillance',
     subtitle: 'Multi-camera surveillance stream grid & telemetry',
   },
-  '/detections': {
-    title: 'Target Detections Feed',
+  '/analysis': {
+    title: 'AI Detection & Analysis',
+    subtitle: 'How detection, tracking, behaviour analysis and scoring work — with live numbers',
+  },
+  '/alerts': {
+    title: 'Alerts & Events',
     subtitle: 'Real-time Person, Vehicle, and Unknown target detections & direct camera links',
   },
-  '/incidents': {
-    title: 'Target Detections Feed',
+  '/detections': {
+    title: 'Alerts & Events',
     subtitle: 'Real-time Person, Vehicle, and Unknown target detections & direct camera links',
+  },
+  '/cameras': {
+    title: 'Camera Management',
+    subtitle: 'Add, edit, test-connect and remove cameras',
+  },
+  '/demo': {
+    title: 'Demo Mode',
+    subtitle: 'Guided walkthrough of the full pipeline for a judge demo',
   },
   '/zones': {
     title: 'Zone Management',

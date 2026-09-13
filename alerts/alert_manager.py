@@ -139,13 +139,27 @@ class AlertManager:
         prev_tier = self._last_tier.get(track_key, "green")
         tier = self._confirmed_tier(track_key, score.tier)
 
+        det.previous_zone = prev_tier
+        det.current_zone = tier
+        det.threat_score = score.total
+        det.threat_level = getattr(score, "level", "LOW")
+        det.threat_reasons = getattr(score, "reasons", [])
+
+        if prev_tier != tier:
+            log.info(
+                "[%s] ZONE_TRANSITION: %s %s %s -> %s (dir=%s)",
+                det.camera_name or "CAM", det.category(), label, prev_tier.upper(), tier.upper(), det.zone_direction,
+            )
+
         if tier == "green":
+            det.status = "CONFIRMED"
             log.debug(
                 "Green: %s %s score=%.0f (observed %s)",
                 det.category(), label, score.total, score.tier,
             )
             return
 
+        det.status = "CONFIRMED"
         escalated = self.TIER_RANK.get(tier, 0) > self.TIER_RANK.get(prev_tier, 0)
         if escalated:
             # A newly confirmed higher tier resets the backoff: this is a
@@ -160,7 +174,9 @@ class AlertManager:
         if not escalated:
             self._repeats[track_key] = self._repeats.get(track_key, 0) + 1
 
+        det.status = "ALERTED"
         self._last_alert_time[track_key] = now
+
         self._offload("notify_integrations", self._notify_integrations, det, score, track_key, now)
 
         if tier == "yellow":

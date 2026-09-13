@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Video, Maximize2, Minimize2, Trash2, AlertTriangle } from 'lucide-react';
+import { Video, Maximize2, Minimize2, Trash2, AlertTriangle, RefreshCw, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface CameraTileProps {
@@ -26,6 +26,10 @@ export interface CameraTileProps {
   isFocused?: boolean;
   onToggleFocus?: () => void;
   onRemove?: () => void;
+  /** Releases the device now instead of waiting for the idle timer (see
+   * integration/api.py's /cameras/{id}/stop). Any viewer reconnects on its
+   * own once someone requests the stream again. */
+  onStop?: () => void;
   className?: string;
 }
 
@@ -50,6 +54,7 @@ export const CameraTile: React.FC<CameraTileProps> = ({
   isFocused = false,
   onToggleFocus,
   onRemove,
+  onStop,
   className,
 }) => {
   // Stream lifecycle. An MJPEG <img> fires onLoad on its first frame and
@@ -77,6 +82,11 @@ export const CameraTile: React.FC<CameraTileProps> = ({
   const src = streamUrl
     ? `${streamUrl}${streamUrl.includes('?') ? '&' : '?'}_r=${attempt}`
     : undefined;
+
+  const handleReconnect = () => {
+    setStreamState('connecting');
+    setAttempt((a) => a + 1);
+  };
 
   const stalled =
     source === 'pipeline' &&
@@ -148,8 +158,7 @@ export const CameraTile: React.FC<CameraTileProps> = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setStreamState('connecting');
-                  setAttempt((a) => a + 1);
+                  handleReconnect();
                 }}
                 className="px-2.5 py-1 rounded border border-white/20 text-[11px] font-mono text-text-dim hover:text-white"
               >
@@ -196,6 +205,32 @@ export const CameraTile: React.FC<CameraTileProps> = ({
 
         {/* TOP-RIGHT: controls */}
         <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleReconnect();
+            }}
+            title="Reconnect this feed"
+            aria-label={`Reconnect camera ${cameraName}`}
+            className="p-1.5 rounded bg-black/85 border border-white/10 text-text-dim hover:text-accent-teal hover:border-accent-teal/40 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+          {onStop && source !== 'idle' && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStop();
+              }}
+              title="Stop this camera (release the device now)"
+              aria-label={`Stop camera ${cameraName}`}
+              className="p-1.5 rounded bg-black/85 border border-white/10 text-text-muted hover:text-accent-yellow hover:border-accent-yellow/40 transition-colors"
+            >
+              <Square className="w-3.5 h-3.5" />
+            </button>
+          )}
           {onRemove && (
             <button
               type="button"

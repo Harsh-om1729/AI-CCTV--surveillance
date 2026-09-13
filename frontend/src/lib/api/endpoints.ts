@@ -28,7 +28,7 @@ export interface ApiCamera {
   isActive: boolean;
   resolution?: string;
   // Real status from /api/v1/cameras (see integration/api.py _camera_status).
-  source?: CameraSource;
+  source?: any;
   health?: string;
   activityGate?: 'HIGH' | 'LOW' | null;
   lowLightBoost?: boolean | null;
@@ -37,7 +37,10 @@ export interface ApiCamera {
   maxTier?: 'green' | 'yellow' | 'red' | null;
   lastFrameAt?: number | null;
   zones?: number;
+  zoneProfile?: string;
+  zoneTier?: 'red' | 'yellow' | 'green';
 }
+
 
 // 1. Cameras
 export const camerasApi = {
@@ -45,8 +48,15 @@ export const camerasApi = {
     return safeFetch<ApiCamera[]>('/cameras', { method: 'GET' }, fallback);
   },
 
-  async addCamera(camera: ApiCamera): Promise<ApiResponse<ApiCamera>> {
+  async addCamera(camera: Partial<ApiCamera>): Promise<ApiResponse<ApiCamera>> {
     return safeFetch<ApiCamera>('/cameras', { method: 'POST', body: JSON.stringify(camera) });
+  },
+
+  async updateCamera(id: string, updates: Partial<ApiCamera>): Promise<ApiResponse<ApiCamera>> {
+    return safeFetch<ApiCamera>(`/cameras/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
   },
 
   async deleteCamera(id: string): Promise<ApiResponse<{ success: boolean; id: string }>> {
@@ -60,7 +70,23 @@ export const camerasApi = {
       method: 'POST',
     });
   },
+
+  /** Briefly opens a candidate source (webcam index or RTSP/HTTP URL) to
+   * check it is reachable, without saving it as a camera. */
+  async testCamera(source: string | number): Promise<ApiResponse<CameraTestResult>> {
+    return safeFetch<CameraTestResult>('/cameras/test', {
+      method: 'POST',
+      body: JSON.stringify({ source }),
+    });
+  },
 };
+
+export interface CameraTestResult {
+  ok: boolean;
+  detail: string;
+  resolution?: string;
+  elapsedMs?: number;
+}
 
 // 2. Incidents — no mock fallback. An unreachable backend yields an empty
 // list plus isFallback, and pages show an offline state instead of sample
@@ -186,6 +212,7 @@ export interface SystemHealth {
     acknowledged?: number;
     resolved?: number;
     openRed?: number;
+    openYellow?: number;
     lastIncidentAt?: number | null;
     error?: string;
   };
@@ -230,3 +257,39 @@ export const systemApi = {
     return safeFetch<IntegrationTestResult>('/integrations/test', { method: 'POST' });
   },
 };
+
+export interface DemoStatus {
+  step: number;
+  totalSteps: number;
+  isRunning: boolean;
+  currentIncidentId?: number | null;
+  latestScore?: number | null;
+  latestTier?: string | null;
+  latestLevel?: string | null;
+  latestReasons?: string[];
+  logs: Array<{
+    step: number;
+    time: string;
+    message: string;
+  }>;
+}
+
+export const demoApi = {
+  async getStatus(): Promise<ApiResponse<DemoStatus>> {
+    return safeFetch<DemoStatus>(
+      '/demo/status',
+      { method: 'GET' },
+      { step: 0, totalSteps: 15, isRunning: false, logs: [] }
+    );
+  },
+  async runFullDemo(): Promise<ApiResponse<DemoStatus>> {
+    return safeFetch<DemoStatus>('/demo/run', { method: 'POST' });
+  },
+  async stepDemo(): Promise<ApiResponse<DemoStatus>> {
+    return safeFetch<DemoStatus>('/demo/step', { method: 'POST' });
+  },
+  async resetDemo(): Promise<ApiResponse<DemoStatus>> {
+    return safeFetch<DemoStatus>('/demo/reset', { method: 'POST' });
+  },
+};
+

@@ -83,12 +83,15 @@ from preprocessing.enhance import Preprocessor
 from profiling.stage_profiler import StageProfiler
 from reid.embedder import OSNetEmbedder
 from reid.reid import PersonGallery
+from runtime.startup_check import StartupValidator
 from tracking.tracker import Tracker
 from zones.drawer import ZoneDrawer
 from zones.zone_engine import ZoneEngine
+from demo.demo_engine import get_demo_engine
 
 configure_logging()
 log = logging.getLogger("ibvap")
+
 
 
 def cli_camera_sources(argv: list) -> "dict[str, int | str] | None":
@@ -197,7 +200,16 @@ def draw_threat_score_overlay(frame, det, scorer: ThreatScorer, dwell_seconds: f
 
 
 def main() -> None:
-    log.info("IBVAP starting up (Phase 18 — Alert Discipline)")
+    log.info("IBVAP starting up")
+    validator = StartupValidator()
+    validator.print_summary()
+
+    if os.getenv("DEMO_MODE", "false").strip().lower() in ("true", "1", "yes"):
+        log.info("DEMO_MODE=true active: running deterministic 15-step demonstration")
+        demo = get_demo_engine()
+        demo.run_all(delay_seconds=0.1)
+        log.info("Demo complete. Live incident recorded: #%s", demo.current_incident_id)
+        return
 
     window_names = {name: f"IBVAP - {name} (press q to quit)" for name in CAMERA_SOURCES}
     for window_name in window_names.values():
@@ -217,18 +229,20 @@ def main() -> None:
     }
     false_alarm_filters = {name: FalseAlarmFilter() for name in CAMERA_SOURCES}
     embedder = OSNetEmbedder(REID_MODEL_PATH)
-    # One shared gallery across all cameras (Phase 15: cross-camera Re-ID) —
-    # resolve() is called with a (camera_name, track_id) key, not a raw
-    # track_id, so two cameras can't collide on the same track_id number.
     person_gallery = PersonGallery(
         embed_fn=embedder.embed,
         similarity_threshold=REID_SIMILARITY_THRESHOLD,
         ttl_seconds=REID_TTL_SECONDS,
         match_margin=REID_MATCH_MARGIN,
     )
+
+    def _zones_file(cam_name):
+        p1 = f"config/zones/{cam_name}.json"
+        return p1 if os.path.exists(p1) else f"config/zones_{cam_name}.json"
+
     zone_engines = {
         name: ZoneEngine(
-            config_path=f"config/zones_{name}.json",
+            config_path=_zones_file(name),
             curfew_start_hour=CURFEW_START_HOUR,
             curfew_end_hour=CURFEW_END_HOUR,
             fixed_tier=CAMERA_ZONE_TIERS.get(name),
@@ -238,27 +252,15 @@ def main() -> None:
     zone_drawers = {
         name: ZoneDrawer(window_names[name], zone_engines[name]) for name in CAMERA_SOURCES
     }
+
+
     loiter_trackers = {name: LoiterTracker() for name in CAMERA_SOURCES}
 
-    # Without zones there is no border line, so sector/direction/loiter/group
-    # all read zero and the score collapses to time + class + movement. That
-    # silently turns a border system into a generic motion alarm, so say it
-    # loudly rather than letting a sentry trust an un-configured camera. A
-    # camera named in CAMERA_ZONE_TIERS needs no drawn polygons at all - its
-    # whole frame is one tier - so it's exempt from the warning.
     for name in CAMERA_SOURCES:
-        if zone_engines[name].fixed_tier is not None:
-            log.info(
-                "[%s] fixed to %s zone tier via CAMERA_ZONE_TIERS — no polygons needed",
-                name, zone_engines[name].fixed_tier.upper(),
-            )
-        elif not zone_engines[name].zones:
+        if zone_engines[name].fixed_tier is None:
             log.warning(
-                "[%s] NO ZONES DEFINED (%s is empty) — border scoring is inactive: "
-                "no sector, crossing-direction, loitering or group risk will be "
-                "applied. Press 'z' on the video window to draw the border line "
-                "(red), approach strip (yellow) and own territory (green).",
-                name, f"config/zones_{name}.json",
+                "[%s] No fixed_tier assigned via CAMERA_ZONE_TIERS. "
+                "Defaulting to 'green' (interior) behavior.", name
             )
     face_recognizer = FaceRecognizer()
     watchlist_db = WatchlistDB()
@@ -308,13 +310,6 @@ def main() -> None:
     publisher = PipelinePublisher()
     camera_state = {name: {} for name in CAMERA_SOURCES}
     last_health_publish = 0.0
-    # Zones saved from the dashboard land in config/zones_<cam>.json. Watching
-    # the mtime lets a running pipeline pick them up without a restart.
-    zone_mtimes = {
-        name: (os.path.getmtime(zone_engines[name].config_path)
-               if os.path.exists(zone_engines[name].config_path) else None)
-        for name in CAMERA_SOURCES
-    }
     models_info = {
         "detector": DETECTION_MODEL_PATH,
         "reid": REID_MODEL_PATH,
@@ -435,6 +430,7 @@ def main() -> None:
             draw_fps_overlay(processed, fps_ema[name])
             zone_drawers[name].draw_overlay(processed)
 
+
         with profiler.stage("publish_live"):
             publisher.publish_frame(name, processed)
         tiers = [s.tier for s in scores]
@@ -474,25 +470,10 @@ def main() -> None:
             now_wall = time.time()
             if now_wall - last_health_publish >= 1.0:
                 last_health_publish = now_wall
-                for name in CAMERA_SOURCES:
-                    path = zone_engines[name].config_path
-                    mtime = os.path.getmtime(path) if os.path.exists(path) else None
-                    if mtime != zone_mtimes[name]:
-                        zone_mtimes[name] = mtime
-                        try:
-                            zone_engines[name].load()
-                            log.info("[%s] zones reloaded from %s (%d zone(s))",
-                                     name, path, len(zone_engines[name].zones))
-                        except (OSError, ValueError, KeyError) as exc:
-                            # A half-written or hand-edited file: keep the
-                            # zones already loaded rather than dropping to none.
-                            log.warning("[%s] could not reload zones from %s: %s",
-                                        name, path, exc)
                 publisher.publish_health({
                     "cameras": {
                         name: {
                             "health": health.get(name),
-                            "zones": len(zone_engines[name].zones),
                             **camera_state[name],
                         }
                         for name in CAMERA_SOURCES
@@ -517,6 +498,7 @@ def main() -> None:
                 break
             for drawer in zone_drawers.values():
                 drawer.handle_key(key)
+
     finally:
         report = profiler.report()
         if report:

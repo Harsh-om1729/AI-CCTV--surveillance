@@ -54,7 +54,12 @@ def _score_breakdown(score) -> dict:
         value = getattr(score, field, None)
         if isinstance(value, str) and value:
             out[field] = value
+    out["threat_level"] = getattr(score, "threat_level", getattr(score, "level", "LOW"))
+    reasons = getattr(score, "reasons", None)
+    if isinstance(reasons, (list, tuple)):
+        out["threat_reasons"] = list(reasons)
     return out
+
 
 
 class IncidentStore:
@@ -133,6 +138,8 @@ class IncidentStore:
             # stored before, so an operator could see *that* something scored
             # 84 but not whether that came from the zone, the hour or movement.
             "breakdown": "TEXT",
+            "threat_level": "TEXT",
+            "event_type": "TEXT",
         }
         for column, definition in new_columns.items():
             if column not in existing:
@@ -169,7 +176,7 @@ class IncidentStore:
         snapshot_path = self._save_encrypted(frame, f"{prefix}_full.jpg.enc")
 
         crop_path = None
-        if crop_frame is not None and crop_frame.size > 0:
+        if crop_frame is not None and getattr(crop_frame, "size", 0) > 0:
             crop_path = self._save_encrypted(crop_frame, f"{prefix}_crop.jpg.enc")
 
         burst_paths = []
@@ -178,36 +185,52 @@ class IncidentStore:
             if path:
                 burst_paths.append(path)
 
-        cur = self._conn.execute(
-            """
-            INSERT INTO incidents
-                (track_id, person_id, category, zone_tier, score, tier, timestamp,
-                 snapshot_path, crop_path, burst_paths, camera_name, breakdown)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                det.track_id, det.person_id, det.category(), det.zone_tier,
-                score.total, score.tier, timestamp,
-                snapshot_path, crop_path, json.dumps(burst_paths),
-                # getattr: callers outside the live pipeline (tests, imports)
-                # may pass objects that never had a camera attached.
-                getattr(det, "camera_name", None),
-                json.dumps(_score_breakdown(score)),
-            ),
-        )
-        self._conn.commit()
-        log.info("Recorded incident #%d (%s, score=%.0f)", cur.lastrowid, score.tier, score.total)
-        return cur.lastrowid
+        threat_level = getattr(score, "threat_level", getattr(score, "level", "LOW"))
+        event_type = getattr(det, "event_type", "ZONE_CROSSING" if getattr(det, "previous_zone", None) != getattr(det, "zone_tier", None) else "ZONE_PRESENCE")
+
+        try:
+            cur = self._conn.execute(
+                """
+                INSERT INTO incidents
+                    (track_id, person_id, category, zone_tier, score, tier, timestamp,
+                     snapshot_path, crop_path, burst_paths, camera_name, breakdown, threat_level, event_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    det.track_id, det.person_id, det.category(), det.zone_tier,
+                    score.total, score.tier, timestamp,
+                    snapshot_path, crop_path, json.dumps(burst_paths),
+                    # getattr: callers outside the live pipeline (tests, imports)
+                    # may pass objects that never had a camera attached.
+                    getattr(det, "camera_name", None),
+                    json.dumps(_score_breakdown(score)),
+                    threat_level,
+                    event_type,
+                ),
+            )
+            self._conn.commit()
+            log.info("Recorded incident #%d (%s, score=%.0f)", cur.lastrowid, score.tier, score.total)
+            return cur.lastrowid
+        except Exception as exc:
+            log.error("Failed persisting incident to database: %s", exc)
+            return -1
 
     def _save_encrypted(self, frame, filename: str) -> "str | None":
-        ok, buffer = cv2.imencode(".jpg", frame)
-        if not ok:
+        try:
+            if frame is None or getattr(frame, "size", 0) == 0:
+                return None
+            ok, buffer = cv2.imencode(".jpg", frame)
+            if not ok:
+                return None
+            encrypted = self._fernet.encrypt(buffer.tobytes())
+            path = os.path.join(self.evidence_dir, filename)
+            with open(path, "wb") as f:
+                f.write(encrypted)
+            return path
+        except Exception as exc:
+            log.warning("Evidence encryption/save failed for %s: %s", filename, exc)
             return None
-        encrypted = self._fernet.encrypt(buffer.tobytes())
-        path = os.path.join(self.evidence_dir, filename)
-        with open(path, "wb") as f:
-            f.write(encrypted)
-        return path
+
 
     def decrypt_image_bytes(self, path: str) -> bytes:
         with open(path, "rb") as f:

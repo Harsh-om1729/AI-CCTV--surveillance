@@ -11,6 +11,9 @@ import {
   X,
   User,
   Server,
+  ScanEye,
+  Camera,
+  Play,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -26,17 +29,64 @@ interface NavItem {
   badge?: string;
 }
 
-const navItems: NavItem[] = [
-  { label: 'Dashboard', to: '/', icon: LayoutDashboard },
-  // Badge is filled in from live camera status at render time; it was a
-  // hardcoded '4 CAM' whatever was connected.
-  { label: 'Live Feeds', to: '/live', icon: Video },
-  { label: 'Detections', to: '/detections', icon: AlertTriangle },
+// The 6 sections the system is organized around, in the order data actually
+// flows through the pipeline (see the Overview page's stage strip).
+const primaryNavItems: NavItem[] = [
+  { label: 'Overview', to: '/', icon: LayoutDashboard },
+  // Badge is filled in from live camera status at render time.
+  { label: 'Live Surveillance', to: '/live', icon: Video },
+  { label: 'AI Detection & Analysis', to: '/analysis', icon: ScanEye },
+  { label: 'Alerts & Events', to: '/alerts', icon: AlertTriangle },
+  { label: 'Camera Management', to: '/cameras', icon: Camera },
+  { label: 'Demo Mode', to: '/demo', icon: Play },
+];
+
+// Supporting tools — real, working features that aren't part of the 6
+// primary sections a first-time viewer needs, kept one tap away.
+const secondaryNavItems: NavItem[] = [
   { label: 'Zones', to: '/zones', icon: Crosshair },
   { label: 'Watchlist', to: '/watchlist', icon: User },
   { label: 'Analytics', to: '/analytics', icon: BarChart3 },
   { label: 'System Health', to: '/settings', icon: Server },
 ];
+
+function renderNavItem(item: NavItem, camBadge: string | undefined, onClose: () => void) {
+  const Icon = item.icon;
+  return (
+    <NavLink
+      key={item.to}
+      to={item.to}
+      end={item.to === '/'}
+      onClick={onClose}
+      className={({ isActive }) =>
+        cn(
+          'group relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none',
+          isActive
+            ? 'bg-[#0f1422] text-white font-semibold border-l-2 border-accent-teal'
+            : 'text-text-dim hover:text-white hover:bg-white/[0.04]'
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <Icon
+            className={cn(
+              'w-4 h-4 shrink-0 transition-colors',
+              isActive ? 'text-accent-teal' : 'text-text-muted group-hover:text-white'
+            )}
+          />
+          <span className="flex-1 truncate">{item.label}</span>
+
+          {(item.to === '/live' ? camBadge : item.badge) && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#141a29] text-text-dim border border-white/10">
+              {item.to === '/live' ? camBadge : item.badge}
+            </span>
+          )}
+        </>
+      )}
+    </NavLink>
+  );
+}
 
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   const { cameras, health, reachable } = useSystemHealth();
@@ -103,48 +153,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
         {/* Navigation List */}
         <nav className="flex-1 px-3 py-5 space-y-1.5 overflow-y-auto">
           <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-widest text-text-muted">
-            Tactical Views
+            Command Center
           </div>
+          {primaryNavItems.map((item) => renderNavItem(item, camBadge, onClose))}
 
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/'}
-                onClick={onClose}
-                className={({ isActive }) =>
-                  cn(
-                    'group relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none',
-                    isActive
-                      ? 'bg-[#0f1422] text-white font-semibold border-l-2 border-accent-teal'
-                      : 'text-text-dim hover:text-white hover:bg-white/[0.04]'
-                  )
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    <Icon
-                      className={cn(
-                        'w-4 h-4 shrink-0 transition-colors',
-                        isActive
-                          ? 'text-accent-teal'
-                          : 'text-text-muted group-hover:text-white'
-                      )}
-                    />
-                    <span className="flex-1 truncate">{item.label}</span>
-
-                    {(item.to === '/live' ? camBadge : item.badge) && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#141a29] text-text-dim border border-white/10">
-                        {item.to === '/live' ? camBadge : item.badge}
-                      </span>
-                    )}
-                  </>
-                )}
-              </NavLink>
-            );
-          })}
+          <div className="px-3 pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-text-muted">
+            More Tools
+          </div>
+          {secondaryNavItems.map((item) => renderNavItem(item, camBadge, onClose))}
         </nav>
 
         {/* Simple System Status Footer */}

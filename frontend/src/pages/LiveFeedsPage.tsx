@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiCamera, camerasApi, cameraStreamUrl } from '@/lib/api';
 import { describeCamera, useSystemHealth } from '@/components/system/SystemHealthProvider';
 import { CameraTile } from '@/components/live';
+import { AddCameraModal } from '@/components/cameras';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { Modal } from '@/components/ui/Modal';
 import {
   Grid2X2,
   Maximize2,
@@ -14,6 +14,7 @@ import {
   Radio,
   Layers,
   Plus,
+  Settings2,
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
@@ -27,6 +28,7 @@ const LEGACY_CAMERAS_STORAGE_KEY = 'ibvap_cameras_data_v3';
 
 
 export const LiveFeedsPage: React.FC = () => {
+  const navigate = useNavigate();
   // One source of truth for cameras and their live status, shared with the
   // topbar, sidebar and dashboard (components/system/SystemHealthProvider).
   const { cameras: apiCameras, health, reachable, refresh } = useSystemHealth();
@@ -69,14 +71,6 @@ export const LiveFeedsPage: React.FC = () => {
     }
   }, [urlCamera, cameras]);
 
-  // Form State for Adding a Camera
-  const [newCamId, setNewCamId] = useState(`cam${cameras.length}`);
-  const [newCamLocation, setNewCamLocation] = useState('');
-  const [newCamSector, setNewCamSector] = useState('North Border Sector');
-  const [sourceType, setSourceType] = useState<'local' | 'rtsp'>('local');
-  const [localCamIndex, setLocalCamIndex] = useState('0');
-  const [newCamStreamUrl, setNewCamStreamUrl] = useState('');
-  const [formError, setFormError] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -118,69 +112,19 @@ export const LiveFeedsPage: React.FC = () => {
     }
   };
 
-  const handleOpenAddModal = () => {
-    setNewCamId(`cam${cameras.length}`);
-    setNewCamLocation('');
-    setNewCamStreamUrl('');
-    setFormError('');
-    setIsAddModalOpen(true);
+  const handleStopCamera = async (camId: string) => {
+    const res = await camerasApi.stopCamera(camId);
+    if (res.isFallback) {
+      showToast(`Could not stop ${camId.toUpperCase()}: ${res.error ?? 'backend unreachable'}`);
+      return;
+    }
+    await refresh();
+    showToast(`Stopped camera ${camId.toUpperCase()} — it reconnects automatically when viewed again`);
   };
 
-  const handleAddCameraSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanId = newCamId.trim().toLowerCase();
-    const cleanLocation = newCamLocation.trim();
-
-    if (!cleanId) {
-      setFormError('Camera ID is required (e.g. cam4)');
-      return;
-    }
-
-    if (cameras.some((c) => c.id.toLowerCase() === cleanId)) {
-      setFormError(`Camera ID "${cleanId}" already exists. Use a unique channel ID.`);
-      return;
-    }
-
-    if (!cleanLocation) {
-      setFormError('Location or post name is required');
-      return;
-    }
-    
-    const finalStreamUrl = sourceType === 'local' ? localCamIndex : newCamStreamUrl.trim();
-
-    const newCamera: CameraItem = {
-      id: cleanId,
-      name: cleanId,
-      location: cleanLocation,
-      sector: newCamSector,
-      streamUrl: finalStreamUrl || undefined,
-      fps: '0.0',
-      activity: '—',
-      isActive: true,
-      resolution: '1920x1080',
-    };
-
-    try {
-      // newCamera.streamUrl carries what the BACKEND opens (a device index
-      // like "0", or an rtsp:// URL); the tile's MJPEG URL is derived from
-      // the id once the backend lists the camera.
-      const res = await camerasApi.addCamera(newCamera);
-      if (res.isFallback) {
-        // Previously the tile was added locally even when this failed, so
-        // the camera "appeared" and then vanished on the next reload.
-        setFormError(`Could not add the camera: ${res.error ?? 'backend unreachable'}`);
-        return;
-      }
-      await refresh();
-      setIsAddModalOpen(false);
-      showToast(`Camera ${cleanId.toUpperCase()} (${cleanLocation}) added successfully`);
-    } catch (err) {
-      setFormError(
-        `Failed to integrate camera with the backend API: ${
-          err instanceof Error ? err.message : 'unknown error'
-        }`
-      );
-    }
+  const handleCameraAdded = async (camera: ApiCamera) => {
+    await refresh();
+    showToast(`Camera ${camera.id.toUpperCase()} added successfully`);
   };
 
   const focusedCamera =
@@ -231,9 +175,17 @@ export const LiveFeedsPage: React.FC = () => {
             variant="primary"
             size="sm"
             leftIcon={<Plus className="w-4 h-4" />}
-            onClick={handleOpenAddModal}
+            onClick={() => setIsAddModalOpen(true)}
           >
             Add Camera
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<Settings2 className="w-3.5 h-3.5" />}
+            onClick={() => navigate('/cameras')}
+          >
+            Manage Cameras
           </Button>
 
           {/* Back to Grid Button (when in focus mode) */}
@@ -328,7 +280,7 @@ export const LiveFeedsPage: React.FC = () => {
           <p className="text-xs text-text-dim">
             Set CAMERA_SOURCES in .env (e.g. cam0=0 for the built-in webcam) or add one here.
           </p>
-          <Button variant="primary" size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={handleOpenAddModal}>
+          <Button variant="primary" size="sm" leftIcon={<Plus className="w-4 h-4" />} onClick={() => setIsAddModalOpen(true)}>
             Add Camera
           </Button>
         </div>
@@ -372,6 +324,7 @@ export const LiveFeedsPage: React.FC = () => {
                 serverNow={serverNow}
                 onToggleFocus={() => handleTileClick(camera.id)}
                 onRemove={() => handleRemoveCamera(camera.id)}
+                onStop={() => handleStopCamera(camera.id)}
               />
             </div>
           ))}
@@ -430,6 +383,7 @@ export const LiveFeedsPage: React.FC = () => {
               isFocused={true}
               onToggleFocus={() => setViewMode('grid')}
               onRemove={() => handleRemoveCamera(focusedCamera.id)}
+              onStop={() => handleStopCamera(focusedCamera.id)}
               className="shadow-2xl"
             />
           </div>
@@ -484,12 +438,12 @@ export const LiveFeedsPage: React.FC = () => {
                 </div>
                 <div>
                   <span className="text-text-muted block text-[10px] uppercase">Border scoring</span>
-                  <span className={`flex items-center gap-1 ${focusedCamera.zones ? 'text-text-primary' : 'text-accent-yellow'}`}>
-                    <Layers className="w-3 h-3" /> {focusedCamera.zones ?? 0} zone{focusedCamera.zones === 1 ? '' : 's'}
+                  <span className="flex items-center gap-1 text-text-primary">
+                    <Layers className="w-3 h-3" /> Fixed Priority
                   </span>
                   <span className="text-[10px] text-text-muted flex items-center gap-1">
                     <Radio className="w-2.5 h-2.5" />
-                    {focusedCamera.zones ? `${focusedCamera.detections ?? 0} target(s) in view` : 'Inactive — draw zones'}
+                    {focusedCamera.detections ?? 0} target(s) in view
                   </span>
                 </div>
               </div>
@@ -499,152 +453,14 @@ export const LiveFeedsPage: React.FC = () => {
       )}
 
 
-      {/* Add Camera Modal Dialog */}
-      <Modal
+      {/* Add Camera Modal — the one shared flow used from Live Surveillance
+          and Camera Management, including RTSP Test Connection. */}
+      <AddCameraModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
-        title="Add Surveillance Camera Channel"
-        description="Register a new CCTV IP stream / BOP outpost camera into the IBVAP surveillance grid."
-        size="md"
-        footer={
-          <div className="flex items-center justify-between w-full">
-            <span />
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsAddModalOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                leftIcon={<Plus className="w-3.5 h-3.5" />}
-                onClick={handleAddCameraSubmit}
-              >
-                Register Camera
-              </Button>
-            </div>
-          </div>
-        }
-      >
-        <form onSubmit={handleAddCameraSubmit} className="space-y-4">
-          {formError && (
-            <div className="p-2.5 bg-accent-red/15 border border-accent-red/40 rounded-sm flex items-center gap-2 text-xs text-accent-red">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{formError}</span>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-mono uppercase text-text-dim mb-1">
-                Camera ID <span className="text-accent-red">*</span>
-              </label>
-              <input
-                type="text"
-                value={newCamId}
-                onChange={(e) => setNewCamId(e.target.value)}
-                placeholder="e.g. cam4"
-                className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal font-mono"
-              />
-              <span className="text-[10px] text-text-muted mt-0.5 block font-mono">
-                Identifier used in AI pipelines
-              </span>
-            </div>
-
-            <div>
-              <label className="block text-xs font-mono uppercase text-text-dim mb-1">
-                Sector / Area
-              </label>
-              <select
-                value={newCamSector}
-                onChange={(e) => setNewCamSector(e.target.value)}
-                className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal"
-              >
-                <option value="North Border Sector">North Border Sector</option>
-                <option value="East Border Sector">East Border Sector</option>
-                <option value="South Perimeter">South Perimeter</option>
-                <option value="West Mountain Sector">West Mountain Sector</option>
-                <option value="Checkpost Bravo Corridor">Checkpost Corridor</option>
-                <option value="Riverine Border Zone">Riverine Border Zone</option>
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-mono uppercase text-text-dim mb-1">
-              Camera Location / Post Name <span className="text-accent-red">*</span>
-            </label>
-            <input
-              type="text"
-              value={newCamLocation}
-              onChange={(e) => setNewCamLocation(e.target.value)}
-              placeholder="e.g. Outpost Delta Watchtower, Gate 3 Checkpoint"
-              className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-mono uppercase text-text-dim mb-1">
-                Source Type
-              </label>
-              <select
-                value={sourceType}
-                onChange={(e) => setSourceType(e.target.value as 'local' | 'rtsp')}
-                className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal"
-              >
-                <option value="local">Local USB/Front Camera</option>
-                <option value="rtsp">RTSP / IP Stream</option>
-              </select>
-            </div>
-
-            {sourceType === 'local' ? (
-              <div>
-                <label className="block text-xs font-mono uppercase text-text-dim mb-1">
-                  Device Index
-                </label>
-                <select
-                  value={localCamIndex}
-                  onChange={(e) => setLocalCamIndex(e.target.value)}
-                  className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal font-mono"
-                >
-                  <option value="0">Camera 0 (Default Front)</option>
-                  <option value="1">Camera 1 (External)</option>
-                  <option value="2">Camera 2</option>
-                  <option value="3">Camera 3</option>
-                </select>
-              </div>
-            ) : (
-              <div>
-                <label className="block text-xs font-mono uppercase text-text-dim mb-1">
-                  RTSP URL
-                </label>
-                <input
-                  type="text"
-                  value={newCamStreamUrl}
-                  onChange={(e) => setNewCamStreamUrl(e.target.value)}
-                  placeholder="rtsp://192.168.1.104:554/h264/ch1/main"
-                  className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal font-mono text-xs"
-                />
-              </div>
-            )}
-
-            {/* Full-width helper row inside the same grid: it was previously
-                emitted after the grid's closing tag, with a stray </div>
-                after it, which left two adjacent JSX roots and failed to
-                parse. col-span-2 keeps it spanning both columns. */}
-            <span className="text-[10px] text-text-muted mt-0.5 block col-span-2">
-              {sourceType === 'local'
-                ? 'Select the hardware device index of the local camera.'
-                : 'Enter the RTSP link for the IP camera.'}
-            </span>
-          </div>
-        </form>
-      </Modal>
+        onAdded={handleCameraAdded}
+        existingIds={cameras.map((c) => c.id)}
+      />
     </div>
   );
 };

@@ -71,6 +71,45 @@ class ThreatScore:
             self.tier = tier_ceiling
             self.total = min(self.total, self.TIER_MAX_TOTAL[tier_ceiling])
 
+    @property
+    def level(self) -> str:
+        if self.total <= GREEN_MAX:
+            return "LOW"
+        if self.total <= YELLOW_MAX:
+            return "MEDIUM"
+        if self.total < 90.0:
+            return "HIGH"
+        return "CRITICAL"
+
+    @property
+    def threat_level(self) -> str:
+        return self.level
+
+    @property
+    def reasons(self) -> list[str]:
+        items = []
+        if self.override_reason:
+            items.append(f"Override: {self.override_reason}")
+        if self.sector_risk >= 25 or (self.override_reason and "border" in self.override_reason.lower()):
+            items.append(f"Entered RED zone (+{self.sector_risk:.0f})")
+        elif self.sector_risk > 0:
+            items.append(f"In active zone sector (+{self.sector_risk:.0f})")
+        if self.direction_risk > 0:
+            items.append(f"Moving INWARD toward border (+{self.direction_risk:.0f})")
+        if self.time_risk >= 20:
+            items.append(f"Curfew window active (+{self.time_risk:.0f})")
+        elif self.time_risk > 0:
+            items.append(f"Time-of-day risk factor (+{self.time_risk:.0f})")
+        if self.kinematics_risk >= 10:
+            items.append(f"High approach speed (+{self.kinematics_risk:.0f})")
+        if self.loiter_risk > 0:
+            items.append(f"Loitering persistence exceeded (+{self.loiter_risk:.0f})")
+        if self.group_risk > 0:
+            items.append(f"Group movement detected (+{self.group_risk:.0f})")
+        if self.class_confidence > 0:
+            items.append(f"Confirmed target classification (+{self.class_confidence:.0f})")
+        return items
+
     def breakdown(self) -> str:
         """One-line "why", for the log and the on-screen overlay. Only the
         components that actually contributed are listed, so a sentry reads the

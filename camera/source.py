@@ -1,14 +1,20 @@
 import logging
+import math
 import os
 import re
+import time
+import numpy as np
+
+# Ensure FFmpeg uses TCP and 5s timeout before cv2 is imported
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|timeout;5000000|stimeout;5000000",
+)
 
 import cv2
 
 log = logging.getLogger("ibvap.camera")
 
-# `rtsp://user:password@host/stream` is the normal way ONVIF/RTSP credentials
-# are supplied (see CAMERA_SOURCES in config/settings.py), so anything that
-# logs a source has to strip them first — the reconnect path logs repeatedly.
 _URL_CREDENTIALS = re.compile(r"//[^/@\s]*:[^/@\s]*@")
 
 
@@ -18,36 +24,57 @@ def redact_source(source) -> str:
     return _URL_CREDENTIALS.sub("//***:***@", str(source))
 
 
+def normalize_source(source: int | str) -> int | str:
+    """Auto-corrects common typos like rtsp:ip:port -> rtsp://ip:port."""
+    if isinstance(source, int):
+        return source
+    src = str(source).strip()
+    if src.isdigit():
+        return int(src)
+    # Fix single colon without double slash
+    if src.startswith("rtsp:") and not src.startswith("rtsp://"):
+        src = "rtsp://" + src[5:].lstrip("/")
+    elif src.startswith("http:") and not src.startswith("http://"):
+        src = "http://" + src[5:].lstrip("/")
+    elif src.startswith("https:") and not src.startswith("https://"):
+        src = "https://" + src[6:].lstrip("/")
+    return src
+
+
 class CameraSource:
     """Wraps a single camera feed: a USB index (0, 1, ...), an RTSP/ONVIF URL,
-    or a local video file path (useful for testing against recorded footage,
-    e.g. vehicles, when no live feed is available).
-
-    Every method is safe to call in any state: `open()` releases a previous
-    capture before replacing it (so reconnecting can't leak handles), and
-    `read()`/`native_fps()`/`rewind()` return a benign value rather than
-    raising when there is no open capture. That lets the producer thread in
-    `camera/stream_manager.py` drive open/read/release in a recovery loop
-    without having to reason about half-open states.
+    a local video file path, or a simulated border feed.
     """
 
     def __init__(self, source: int | str, width: int = 640, height: int = 480):
-        self.source = source
+        self.source = normalize_source(source)
         self.width = width
         self.height = height
-        self.is_file = isinstance(source, str) and os.path.isfile(source)
+        self.is_file = isinstance(self.source, str) and os.path.isfile(self.source)
+        self.is_simulated = str(self.source).lower() in ("simulated", "demo", "mock", "virtual")
         self.cap: cv2.VideoCapture | None = None
+        self._sim_frame_count = 0
 
     def open(self) -> None:
-        # Reconnecting reuses this method, so drop any previous capture first
-        # rather than orphaning an unreleased VideoCapture on every attempt.
         self.release()
-        cap = cv2.VideoCapture(self.source)
+        self.source = normalize_source(self.source)
+        if str(self.source).lower() in ("simulated", "demo", "mock", "virtual"):
+            self.is_simulated = True
+            log.info("Camera opened in simulated border surveillance mode: %s (%dx%d)", self.source, self.width, self.height)
+            return
+
+        self.is_simulated = False
+        is_url = isinstance(self.source, str) and ("://" in self.source)
+        backend = cv2.CAP_FFMPEG if is_url else cv2.CAP_ANY
+
+        cap = cv2.VideoCapture(self.source, backend)
         if not cap.isOpened():
-            # A VideoCapture that failed to open still holds an object (and,
-            # for network sources, possibly a socket) — release it explicitly.
             cap.release()
             raise RuntimeError(f"Could not open camera source: {redact_source(self.source)}")
+
+        if is_url:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.cap = cap
@@ -56,6 +83,8 @@ class CameraSource:
         )
 
     def is_open(self) -> bool:
+        if self.is_simulated:
+            return True
         return self.cap is not None and self.cap.isOpened()
 
     def native_fps(self) -> float:
@@ -69,6 +98,25 @@ class CameraSource:
         frame, or handed back an empty/invalid one. Never raises: a dropped
         RTSP stream can surface as an OpenCV exception rather than `ok=False`,
         and the caller's recovery path is the same either way."""
+        if self.is_simulated:
+            self._sim_frame_count += 1
+            t = self._sim_frame_count * 0.04
+            frame = np.full((self.height, self.width, 3), (35, 40, 45), dtype=np.uint8)
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (self.width, self.height // 3), (0, 0, 180), -1)
+            cv2.rectangle(overlay, (0, self.height // 3), (self.width, 2 * self.height // 3), (0, 180, 200), -1)
+            cv2.rectangle(overlay, (0, 2 * self.height // 3), (self.width, self.height), (0, 150, 0), -1)
+            cv2.addWeighted(overlay, 0.22, frame, 0.78, 0, frame)
+            cv2.line(frame, (0, self.height // 3), (self.width, self.height // 3), (0, 0, 255), 2)
+            cv2.line(frame, (0, 2 * self.height // 3), (self.width, 2 * self.height // 3), (0, 255, 255), 2)
+            py = int((self.height * 0.75) - (abs(math.sin(t * 0.35)) * (self.height * 0.55)))
+            px = int((self.width * 0.45) + (math.cos(t * 0.25) * (self.width * 0.2)))
+            cv2.rectangle(frame, (px - 22, py - 55), (px + 22, py), (210, 210, 210), 2)
+            cv2.circle(frame, (px, py - 42), 10, (230, 230, 230), -1)
+            cv2.putText(frame, "LIVE SURVEILLANCE FEED", (20, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+            cv2.putText(frame, time.strftime("%H:%M:%S"), (self.width - 110, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            return frame
+
         cap = self.cap
         if cap is None:
             return None

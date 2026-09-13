@@ -1,17 +1,76 @@
 # IBVAP — Intelligent Border Video Analytics Platform
 
-Built phase by phase per `../Roadmap`. See that file for the full plan.
+**Edge-native, air-gapped, explainable video analytics and zero-false-alarm intrusion detection.**
 
-## Setup
+Built for high-stakes perimeter security with complete air-gapped independence, deterministic threat scoring, and tamper-resistant encrypted evidence.
 
-```bash
-cd ibvap
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python app.py
+---
+
+## 🏛️ End-to-End System Architecture
+
 ```
+CAMERA / VIDEO STREAM
+       ↓
+PREPROCESSING (Night / Fog CLAHE & Activity Gating)
+       ↓
+DETECTION (YOLOv8s ONNX Runtime)
+       ↓
+TRACKING (ByteTrack / Multi-Target Track Association)
+       ↓
+GROUND POSITION CALCULATION (Bottom-Center: (x1+x2)/2, y2)
+       ↓
+GEOMETRIC ZONES (Polygonal cv2.pointPolygonTest: RED > YELLOW > GREEN)
+       ↓
+DIRECTION & KINEMATICS (Inward / Outward Vector + Speed Estimation)
+       ↓
+TEMPORAL CONFIRMATION (3-frame Debounce / Cooldown Hysteresis)
+       ↓
+THREAT SCORING (Explainable 0-100 Score with Transparent Contributing Reasons)
+       ↓
+ALERT ENGINE (Siren, Chime, Audio Throttle & Escalation Bypass)
+       ↓
+INCIDENT LIFECYCLE (DETECTED → CONFIRMED → ALERTED → ACKNOWLEDGED → RESOLVED)
+       ↓
+EVIDENCE AT REST (AES-Fernet Encrypted Snapshots & Crops)
+       ↓
+SQLITE REPOSITORIES (`incidents.db` + `threat_rules.db` + `watchlist.db`)
+       ↓
+FASTAPI REST & WEBSOCKET ENGINE (`/api/v1/`)
+       ↓
+COMMAND CENTER DASHBOARD (React + TypeScript + Tailwind)
+```
+
+---
+
+## 🚀 Quick Start — Teacher & Judge Demo
+
+For a full script and walkthrough, see **[docs/TEACHER_DEMO.md](docs/TEACHER_DEMO.md)**.
+
+### 1. Pre-flight Health Check
+Verify models, databases, encryption keys, and camera profiles:
+```bash
+./venv/bin/python runtime/startup_check.py
+```
+
+### 2. Run the Deterministic 15-Step Demo
+Executes Track #17 walking `GREEN -> YELLOW -> RED`, passing through the real production zone engine, threat scorer (96/100 CRITICAL), alert manager, Fernet evidence encryption, and SQLite persistence:
+```bash
+./venv/bin/python scripts/run_demo.py
+```
+
+### 3. Start the Platform
+```bash
+# Terminal 1: Backend API & Monitoring Server
+./venv/bin/python app.py
+
+# Terminal 2: React Command Center UI
+cd frontend && npm run dev
+```
+Open `http://localhost:5173/dashboard` to control the demo, view real-time camera feeds, inspect geometric zones, and manage incidents.
+
+---
+
+## Setup & Dependencies
 
 ### Model weights — not in git
 

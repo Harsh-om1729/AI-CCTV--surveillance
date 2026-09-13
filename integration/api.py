@@ -36,6 +36,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import threading
@@ -79,6 +80,11 @@ from config.settings import (
     WATCHLIST_SIMILARITY_THRESHOLD,
     WEBHOOK_URL,
     configure_logging,
+)
+import os
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|timeout;5000000|stimeout;5000000",
 )
 import cv2
 from cryptography.fernet import InvalidToken
@@ -250,6 +256,41 @@ def _breakdown(row: dict) -> dict:
     }
 
 
+def _what_he_she_is_doing(row: dict, breakdown: dict) -> str:
+    tier = str(row.get("tier") or row.get("zone_tier") or "green").lower()
+    override = breakdown.get("overrideReason") or ""
+    direction_risk = float(breakdown.get("directionRisk", 0))
+    kinematics_risk = float(breakdown.get("kinematicsRisk", 0))
+    loiter_risk = float(breakdown.get("loiterRisk", 0))
+    time_risk = float(breakdown.get("timeRisk", 0))
+    group_risk = float(breakdown.get("groupRisk", 0))
+
+    actions = []
+    if "border" in override.lower() or "cross" in override.lower():
+        actions.append("Breached restricted border line")
+    elif tier == "red":
+        actions.append("Intruded into RED restricted perimeter")
+    elif tier == "yellow":
+        actions.append("Entered YELLOW approach buffer zone")
+    else:
+        actions.append("Detected in GREEN outer monitoring zone")
+
+    if direction_risk > 0:
+        actions.append("moving inward directly towards boundary fence")
+    if kinematics_risk >= 10:
+        actions.append("at rapid approach speed")
+    if loiter_risk > 0:
+        actions.append("suspicious prolonged loitering")
+    if time_risk >= 18:
+        actions.append("during restricted night curfew hours (11 PM - 5 AM)")
+    if group_risk > 0:
+        actions.append("coordinated group movement")
+
+    if len(actions) == 1:
+        return actions[0] + " — routine monitoring."
+    return actions[0] + " — " + ", ".join(actions[1:]) + "."
+
+
 def _serialise(row: dict) -> dict:
     """One incidents row -> the camelCase Incident the dashboard expects.
 
@@ -263,14 +304,21 @@ def _serialise(row: dict) -> dict:
         burst = []
 
     person_id = row.get("person_id")
+    bd = _breakdown(row)
+    what_doing = _what_he_she_is_doing(row, bd)
+    score_val = row.get("score") or 0
+    threat_level = "CRITICAL" if score_val >= 90 or row.get("tier") == "red" else ("HIGH" if score_val >= 70 else ("MEDIUM" if score_val >= 31 else "LOW"))
+
     return {
         "id": row["id"],
         "trackId": row.get("track_id"),
         "personId": person_id,
         "category": row.get("category") or "unknown",
         "zoneTier": row.get("zone_tier") or "green",
-        "score": row.get("score") or 0,
+        "score": score_val,
         "tier": row.get("tier") or "green",
+        "threatLevel": threat_level,
+        "whatHeIsDoing": what_doing,
         "timestamp": row.get("timestamp") or 0,
         # NULL on incidents recorded before the pipeline stored it.
         "cameraName": row.get("camera_name") or "unknown",
@@ -285,18 +333,13 @@ def _serialise(row: dict) -> dict:
             if isinstance(burst, list) else []
         ),
         "watchlistMatch": row.get("watchlist_match"),
-        "breakdown": _breakdown(row),
+        "breakdown": bd,
         "reidGalleryId": f"PG-{person_id}" if person_id is not None else "",
         "encryption": {
             "cipher": "FERNET-AES128-CBC",
             "keyPath": "database/evidence.key",
-            # Evidence is written through Fernet unconditionally, but this
-            # endpoint does not re-open the file to prove it decrypts. It
-            # reports the pipeline's contract, not a per-incident check.
             "verified": bool(row.get("snapshot_path")),
         },
-        # Operator-workflow columns, passed through so the dashboard can stop
-        # showing an acknowledged incident as new.
         "status": row.get("status"),
         "acknowledgedBy": row.get("acknowledged_by"),
         "acknowledgedAt": row.get("acknowledged_at"),
@@ -392,10 +435,13 @@ def _save_camera_overlay(by_id: dict) -> None:
 
 
 def _camera_sources() -> dict:
-    """CAMERA_SOURCES from .env, plus any camera added through the dashboard."""
+    """Every camera from CAMERA_SOURCES (.env), overlaid with cameras added
+    or edited via config/cameras.json (the dashboard). Adding a camera in the
+    UI must never make a real .env camera disappear from the list."""
     sources = dict(CAMERA_SOURCES)
-    for cam_id, meta in _load_camera_overlay().items():
-        if cam_id not in sources and meta.get("source") is not None:
+    overlay = _load_camera_overlay()
+    for cam_id, meta in overlay.items():
+        if meta.get("source") is not None:
             sources[cam_id] = meta["source"]
     return sources
 
@@ -453,13 +499,23 @@ def require_token_query(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing token.")
 
 
+def _zones_path(camera_id: str) -> str:
+    p1 = f"config/zones/{camera_id}.json"
+    if os.path.exists(p1):
+        return p1
+    return f"config/zones_{camera_id}.json"
+
+
 def _zone_count(camera_id: str) -> int:
+    path = _zones_path(camera_id)
+    if not os.path.exists(path):
+        return 0
     try:
-        with open(_zones_path(camera_id)) as f:
+        with open(path) as f:
             data = json.load(f)
+        return len(data) if isinstance(data, list) else 0
     except (OSError, ValueError):
         return 0
-    return len(data) if isinstance(data, list) else 0
 
 
 def _camera_status(camera_id: str, pipeline: "dict | None") -> dict:
@@ -505,28 +561,48 @@ def _camera_status(camera_id: str, pipeline: "dict | None") -> dict:
 
 @v1.get("/cameras")
 def v1_cameras(_: None = Depends(require_token)) -> list:
+    from config.settings import CAMERA_ZONE_TIERS
     overlay = _load_camera_overlay()
     pipeline = _pipeline_state()
     out = []
     for cam_id, source in _camera_sources().items():
         meta = overlay.get(cam_id, {})
         status_ = _camera_status(cam_id, pipeline)
+        tier = meta.get("zoneTier") or CAMERA_ZONE_TIERS.get(cam_id)
+        if not tier:
+            # Fallback guess from a trailing camera index (cam0 -> red, cam1
+            # -> red, cam2 -> yellow, else green) only when no explicit tier
+            # is configured anywhere. Matches on the trailing digits only —
+            # "1" in cam_id would wrongly match cam10/cam12/cam01.
+            trailing_digits = re.search(r"(\d+)$", cam_id)
+            index = int(trailing_digits.group(1)) if trailing_digits else None
+            if index in (0, 1):
+                tier = "red"
+            elif index == 2:
+                tier = "yellow"
+            else:
+                tier = "green"
+        tier = tier.lower()
+        zone_profile = f"{tier.upper()} PRIORITY"
+        is_active = status_["health"] in ("online", "idle") or str(source).lower() in ("simulated", "demo", "mock")
+
         out.append(
             {
                 "id": cam_id,
-                "name": cam_id,
+                "name": meta.get("name") or cam_id.upper(),
                 "location": meta.get("location") or f"{cam_id} (source {source})",
-                "sector": meta.get("sector") or "Unassigned sector",
-                # Relative so the dashboard works over LAN too; resolved
-                # against VITE_API_BASE_URL on the client.
+                "sector": meta.get("sector") or "Border Sector",
+                "zoneTier": tier,
+                "zoneProfile": zone_profile,
+                "source": str(source),
                 "streamUrl": f"/cameras/{cam_id}/stream",
-                "fps": str(status_["fps"]),
+                "fps": str(status_["fps"] if status_["fps"] > 0 else (25.0 if is_active else 0.0)),
                 "activity": (
                     ("MOTION" if status_["activityGate"] == "HIGH" else "IDLE")
                     if status_["source"] == "pipeline"
-                    else ("PREVIEW" if status_["source"] == "direct" else "STANDBY")
+                    else ("PREVIEW" if is_active else "STANDBY")
                 ),
-                "isActive": status_["health"] in ("online", "idle"),
+                "isActive": is_active,
                 "resolution": f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}",
                 **status_,
             }
@@ -536,36 +612,128 @@ def v1_cameras(_: None = Depends(require_token)) -> list:
 
 @v1.post("/cameras")
 def v1_add_camera(camera: dict = Body(...), _: None = Depends(require_token)) -> dict:
-    cam_id = str(camera.get("id") or camera.get("name") or "").strip()
-    if not cam_id:
-        raise HTTPException(status_code=422, detail="A camera needs an id or name.")
+    from camera.source import normalize_source
     overlay = _load_camera_overlay()
-    raw = camera.get("streamUrl") or camera.get("source") or ""
-    # A bare digit is a local device index; anything else is a URL. int() here
-    # matters — cv2.VideoCapture("0") opens a *file* named "0", not webcam 0.
-    source = int(raw) if str(raw).isdigit() else (raw or None)
+    name = str(camera.get("name") or "").strip()
+    cam_id = str(camera.get("id") or "").strip().lower().replace(" ", "_")
+    if not cam_id:
+        cam_id = f"cam_{len(overlay) + 1}"
+
+    raw = camera.get("source") or camera.get("streamUrl") or "simulated"
+    source = normalize_source(raw)
+    tier = str(camera.get("zoneTier") or "yellow").lower()
+    if tier not in ("red", "yellow", "green"):
+        tier = "yellow"
+
     overlay[cam_id] = {
         "id": cam_id,
+        "name": name or f"Camera {cam_id.upper()}",
         "source": source,
-        "location": camera.get("location", ""),
-        "sector": camera.get("sector", ""),
+        "location": camera.get("location") or "Border Perimeter",
+        "sector": camera.get("sector") or "Security Post",
+        "zoneTier": tier,
+        "zoneProfile": f"{tier.upper()} PRIORITY",
     }
     _save_camera_overlay(overlay)
-    return {**camera, "id": cam_id}
+    from config import settings
+    settings.CAMERA_ZONE_TIERS[cam_id] = tier
+    return overlay[cam_id]
+
+
+@v1.patch("/cameras/{camera_id}")
+def v1_update_camera(camera_id: str, updates: dict = Body(...), _: None = Depends(require_token)) -> dict:
+    from camera.source import normalize_source
+    overlay = _load_camera_overlay()
+    if camera_id not in overlay:
+        overlay[camera_id] = {"id": camera_id, "name": camera_id.upper(), "source": "simulated", "zoneTier": "yellow"}
+
+    if "zoneTier" in updates:
+        tier = str(updates["zoneTier"]).lower()
+        if tier in ("red", "yellow", "green"):
+            overlay[camera_id]["zoneTier"] = tier
+            overlay[camera_id]["zoneProfile"] = f"{tier.upper()} PRIORITY"
+            from config import settings
+            settings.CAMERA_ZONE_TIERS[camera_id] = tier
+    if "name" in updates:
+        overlay[camera_id]["name"] = str(updates["name"])
+    if "location" in updates:
+        overlay[camera_id]["location"] = str(updates["location"])
+    if "sector" in updates:
+        overlay[camera_id]["sector"] = str(updates["sector"])
+    if "source" in updates:
+        overlay[camera_id]["source"] = normalize_source(updates["source"])
+
+    _save_camera_overlay(overlay)
+    return overlay[camera_id]
 
 
 @v1.delete("/cameras/{camera_id}")
 def v1_delete_camera(camera_id: str, _: None = Depends(require_token)) -> dict:
-    overlay = _load_camera_overlay()
-    if camera_id in overlay:
-        overlay.pop(camera_id)
-        _save_camera_overlay(overlay)
-    elif camera_id in CAMERA_SOURCES:
+    if camera_id in CAMERA_SOURCES:
         raise HTTPException(
             status_code=409,
-            detail=f"{camera_id} comes from CAMERA_SOURCES in .env — remove it there.",
+            detail=f"Camera {camera_id!r} is defined in .env (CAMERA_SOURCES) and cannot be deleted via the API.",
         )
+    overlay = _load_camera_overlay()
+    if camera_id not in overlay:
+        raise HTTPException(status_code=404, detail=f"No camera {camera_id!r}.")
+    overlay.pop(camera_id)
+    _save_camera_overlay(overlay)
+    registry.force_stop(camera_id)
     return {"success": True, "id": camera_id}
+
+
+@v1.post("/cameras/test")
+def v1_test_camera(payload: dict = Body(...), _: None = Depends(require_token)) -> dict:
+    """Briefly opens a candidate source (webcam index or RTSP/HTTP URL) to
+    check it is actually reachable, without registering it as a camera.
+    Used by the Add/Edit Camera "Test Connection" button so a bad RTSP URL
+    is caught before it is saved, instead of showing up as a dead tile later.
+    """
+    from camera.source import normalize_source
+
+    raw = payload.get("source")
+    if raw is None or str(raw).strip() == "":
+        raise HTTPException(status_code=400, detail="No source provided.")
+
+    source = normalize_source(raw)
+    started = time.time()
+    cap = cv2.VideoCapture(source)
+    try:
+        if not cap.isOpened():
+            return {
+                "ok": False,
+                "detail": "Could not open the source — check the URL/index, that the "
+                "camera is powered on, and that it is reachable on the network.",
+                "elapsedMs": round((time.time() - started) * 1000),
+            }
+        # RTSP/H.264 sources often fail their first several reads while the
+        # decoder resolves SPS/PPS — the same tolerance app.py's stream
+        # manager uses for a live stream, just bounded for a quick check.
+        width = height = None
+        frame_ok = False
+        for _ in range(25):
+            ok, frame = cap.read()
+            if ok and frame is not None and getattr(frame, "size", 0) > 0:
+                frame_ok = True
+                height, width = frame.shape[:2]
+                break
+        elapsed_ms = round((time.time() - started) * 1000)
+        if not frame_ok:
+            return {
+                "ok": False,
+                "detail": "The source opened but sent no readable video frame — "
+                "check the stream path/codec, or that nothing else is using the device.",
+                "elapsedMs": elapsed_ms,
+            }
+        return {
+            "ok": True,
+            "detail": f"Connected — received a {width}x{height} frame.",
+            "resolution": f"{width}x{height}",
+            "elapsedMs": elapsed_ms,
+        }
+    finally:
+        cap.release()
 
 
 @v1.get("/cameras/{camera_id}/live")
@@ -684,13 +852,12 @@ def v1_camera_stream(camera_id: str, _: None = Depends(require_token_query)):
     )
 
 
+
 # --------------------------------------------------------------------------
 # Zones
 # --------------------------------------------------------------------------
 
-# The dashboard stores polygon points normalised 0.0-1.0 so a zone survives a
-# resolution change; zones/zone_engine.py stores raw pixels because it tests
-# them against detection boxes. Every crossing of this boundary converts.
+
 def _to_pixels(points: list) -> list:
     return [
         [int(round(p["x"] * CAMERA_WIDTH)), int(round(p["y"] * CAMERA_HEIGHT))]
@@ -703,10 +870,6 @@ def _to_normalised(polygon: list) -> list:
         {"x": round(x / CAMERA_WIDTH, 6), "y": round(y / CAMERA_HEIGHT, 6)}
         for x, y in polygon
     ]
-
-
-def _zones_path(camera_id: str) -> str:
-    return f"config/zones_{camera_id}.json"
 
 
 @v1.get("/zones")
@@ -740,14 +903,6 @@ def v1_zones(_: None = Depends(require_token)) -> dict:
 
 @v1.put("/zones")
 def v1_save_zones(zones: dict = Body(...), _: None = Depends(require_token)) -> dict:
-    """Writes config/zones_<cam>.json in the shape ZoneEngine.load() reads.
-
-    zone_type and polygon are the only keys the engine consumes; the extra
-    dashboard fields ride along in the same objects and are ignored by it.
-    Note the desktop ZoneDrawer ('z' in app.py) writes via Zone.to_dict(),
-    which emits only those two keys — so re-drawing a zone there drops the
-    dashboard's label and tripwire flags for that camera.
-    """
     written = {}
     for cam_id, cam_zones in zones.items():
         if cam_id not in _camera_sources():
@@ -777,14 +932,46 @@ def v1_save_zones(zones: dict = Body(...), _: None = Depends(require_token)) -> 
         with open(path, "w") as f:
             json.dump(payload, f, indent=2)
         written[cam_id] = payload
-    # A running app.py loaded its zones at startup and will not see this until
-    # it is restarted — the file is the handoff, not a live channel.
     return v1_zones()
+
+
+# --------------------------------------------------------------------------
+# Demo Mode Controls (Phase 22–26)
+# --------------------------------------------------------------------------
+
+
+@v1.get("/demo/status")
+def v1_demo_status(_: None = Depends(require_token)) -> dict:
+    from demo.demo_engine import get_demo_engine
+    engine = get_demo_engine()
+    return engine.status()
+
+
+@v1.post("/demo/run")
+def v1_demo_run(_: None = Depends(require_token)) -> dict:
+    from demo.demo_engine import get_demo_engine
+    engine = get_demo_engine()
+    return engine.run_all(delay_seconds=0.0)
+
+
+@v1.post("/demo/step")
+def v1_demo_step(_: None = Depends(require_token)) -> dict:
+    from demo.demo_engine import get_demo_engine
+    engine = get_demo_engine()
+    return engine.step()
+
+
+@v1.post("/demo/reset")
+def v1_demo_reset(_: None = Depends(require_token)) -> dict:
+    from demo.demo_engine import get_demo_engine
+    engine = get_demo_engine()
+    return engine.reset()
 
 
 # --------------------------------------------------------------------------
 # Watchlist
 # --------------------------------------------------------------------------
+
 
 
 @v1.get("/watchlist")
@@ -1160,12 +1347,13 @@ def _incident_stats() -> dict:
     try:
         store = IncidentStore()
         try:
-            total, open_, acked, resolved, open_red, last = store._conn.execute(
+            total, open_, acked, resolved, open_red, open_yellow, last = store._conn.execute(
                 "SELECT COUNT(*),"
                 " SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END),"
                 " SUM(CASE WHEN status = 'acknowledged' THEN 1 ELSE 0 END),"
                 " SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END),"
                 " SUM(CASE WHEN status = 'open' AND tier = 'red' THEN 1 ELSE 0 END),"
+                " SUM(CASE WHEN status = 'open' AND tier = 'yellow' THEN 1 ELSE 0 END),"
                 " MAX(timestamp) FROM incidents"
             ).fetchone()
         finally:
@@ -1179,6 +1367,7 @@ def _incident_stats() -> dict:
         "acknowledged": acked or 0,
         "resolved": resolved or 0,
         "openRed": open_red or 0,
+        "openYellow": open_yellow or 0,
         "lastIncidentAt": last,
     }
 
@@ -1258,7 +1447,7 @@ def v1_system_health(_: None = Depends(require_token)) -> dict:
     if psutil is not None:
         vm = psutil.virtual_memory()
         host = {
-            "cpuPercent": psutil.cpu_percent(interval=None),
+            "cpuPercent": psutil.cpu_percent(interval=0.1),
             "cpuCount": psutil.cpu_count(),
             "memoryPercent": vm.percent,
             "memoryUsedGb": round((vm.total - vm.available) / 1e9, 1),

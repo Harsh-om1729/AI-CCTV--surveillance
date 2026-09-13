@@ -9,6 +9,8 @@ export interface ThreatScoreBreakdown {
   overrideReason?: string | null;
   tierCeiling?: string | null;
   ceilingReason?: string | null;
+  threatLevel?: string;
+  threatReasons?: string[];
   // false for incidents recorded before the pipeline stored its breakdown —
   // the zeros are "not recorded", not a computed score.
   recorded?: boolean;
@@ -42,5 +44,10 @@ export interface Incident {
   resolvedBy?: string | null;
   resolvedAt?: number | null;
   resolutionReason?: string | null;
+  direction?: string | null;
+  transition?: string | null;
+  whatHeIsDoing?: string | null;
+  threatLevel?: string | null;
 }
+
 

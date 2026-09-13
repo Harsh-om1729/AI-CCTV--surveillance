@@ -22,10 +22,20 @@ class Detection:
         "speed",
         "person_id",
         "zone_tier",
+        "current_zone",
         "zone_direction",
         "watchlist_match",
         "watchlist_similarity",
         "camera_name",
+        "previous_zone",
+        "threat_score",
+        "threat_level",
+        "threat_reasons",
+        "status",
+        "first_seen",
+        "last_seen",
+        "last_update",
+        "__dict__",
     )
 
     def __init__(self, class_id: int, class_name: str, confidence: float, box: tuple):
@@ -38,13 +48,30 @@ class Detection:
         self.speed: float = 0.0  # pixels/frame over recent history
         self.person_id: int | None = None  # persistent identity from the Re-ID gallery
         self.zone_tier: str | None = None  # "red" | "yellow" | "green" | "none"
-        self.zone_direction: str | None = None  # "inward" | "outward" | None (yellow only)
+        self.current_zone: str | None = None
+
+        self.zone_direction: str | None = None  # "inward" | "outward" | "parallel" | None
         self.watchlist_match: str | None = None  # matched name, if any
         self.watchlist_similarity: float = 0.0
         # Which camera produced this detection. Set by app.py, which is the
         # only place that knows; the incident store persists it so an alert
         # can be traced back to a location. None outside the live pipeline.
         self.camera_name: str | None = None
+        # Canonical state tracking
+        self.previous_zone: str | None = None
+        self.threat_score: float = 0.0
+        self.threat_level: str = "LOW"
+        self.threat_reasons: list[str] = []
+        self.status: str = "DETECTED"
+        self.first_seen: float | None = None
+        self.last_seen: float | None = None
+        self.last_update: float | None = None
+
+    @property
+    def ground_point(self) -> tuple[float, float]:
+        """Bottom-center reference point (x, y) on the ground."""
+        x1, y1, x2, y2 = self.box
+        return ((x1 + x2) / 2.0, float(y2))
 
     def category(self) -> str:
         if self.class_id in PERSON_CLASS_IDS:
@@ -52,6 +79,7 @@ class Detection:
         if self.class_id in VEHICLE_CLASS_IDS:
             return "vehicle"
         return "animal"
+
 
 
 def model_input_size(model_path: str) -> "int | None":
