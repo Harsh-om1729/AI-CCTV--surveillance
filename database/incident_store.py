@@ -50,7 +50,7 @@ def _score_breakdown(score) -> dict:
             out[field] = round(float(value), 2)
         except (TypeError, ValueError):
             continue
-    for field in ("override_reason", "tier_ceiling", "ceiling_reason"):
+    for field in ("override_reason", "elevate_reason", "tier_ceiling", "ceiling_reason"):
         value = getattr(score, field, None)
         if isinstance(value, str) and value:
             out[field] = value

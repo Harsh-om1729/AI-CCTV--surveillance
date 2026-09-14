@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Incident } from '@/lib/mockIncidents';
 import { incidentsApi } from '@/lib/api';
 import { useBackendData } from '@/lib/useBackendData';
+import { threatStatusLabel } from '@/lib/threatStatus';
 import { useSystemHealth } from '@/components/system/SystemHealthProvider';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Card } from '@/components/ui/Card';
@@ -51,7 +52,7 @@ export const AiAnalysisPage: React.FC = () => {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <h2 className="text-lg font-bold text-text-primary flex items-center gap-2">
             <ScanEye className="w-5 h-5 text-accent-teal" />
             AI Detection &amp; Analysis
           </h2>
@@ -86,7 +87,7 @@ export const AiAnalysisPage: React.FC = () => {
         >
           <div className="grid grid-cols-3 gap-3 text-center">
             <div>
-              <div className="text-2xl font-bold text-white">{totals.detections}</div>
+              <div className="text-2xl font-bold text-text-primary">{totals.detections}</div>
               <div className="text-[10px] text-text-dim uppercase">Live targets</div>
             </div>
             <div>
@@ -116,11 +117,11 @@ export const AiAnalysisPage: React.FC = () => {
           <div className="text-xs text-text-dim space-y-1.5">
             <p>
               A raw track ID changes if someone leaves frame — that is a known limit of motion-only tracking.
-              The Re-ID gallery assigns a stable <span className="text-white font-semibold">person #</span> on
+              The Re-ID gallery assigns a stable <span className="text-text-primary font-semibold">person #</span> on
               top of that, matched by appearance, not position.
             </p>
             <p className="text-text-muted">
-              Watchlist enrolled: <span className="text-white font-semibold">{totals.watchlistEnrolled ?? '—'}</span>{' '}
+              Watchlist enrolled: <span className="text-text-primary font-semibold">{totals.watchlistEnrolled ?? '—'}</span>{' '}
               — a match escalates to RED regardless of zone.
             </p>
           </div>
@@ -141,7 +142,7 @@ export const AiAnalysisPage: React.FC = () => {
             <li>Speed: a U-curve — both standing still and running score higher than an ordinary walk</li>
             <li>Loitering: sustained dwell time inside a zone</li>
             <li>
-              Zoned cameras: <span className="text-white font-semibold">{totals.camerasWithZones}/{totals.totalZoned || cameras.length}</span>
+              Zoned cameras: <span className="text-text-primary font-semibold">{totals.camerasWithZones}/{totals.totalZoned || cameras.length}</span>
             </li>
           </ul>
         </Card>
@@ -189,9 +190,9 @@ export const AiAnalysisPage: React.FC = () => {
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={TIER_BADGE[latestExplained.tier] ?? 'neutral'} dot pulse size="sm">
-                {latestExplained.tier.toUpperCase()} · {latestExplained.score.toFixed(0)}/100
+                {threatStatusLabel(latestExplained.tier)} · {latestExplained.score.toFixed(0)}/100
               </Badge>
-              <span className="text-xs font-mono text-white uppercase">{latestExplained.cameraName}</span>
+              <span className="text-xs font-mono text-text-primary uppercase">{latestExplained.cameraName}</span>
               <span className="text-xs text-text-dim">Track #{latestExplained.trackId}</span>
               <button
                 onClick={() => navigate(`/alerts?incident=${latestExplained.id}`)}
@@ -201,7 +202,7 @@ export const AiAnalysisPage: React.FC = () => {
               </button>
             </div>
             {latestExplained.whatHeIsDoing && (
-              <p className="text-sm text-white bg-black/30 border border-white/10 rounded-lg p-2.5">
+              <p className="text-sm text-text-primary bg-bg-elevated border border-ink/10 rounded-lg p-2.5">
                 {latestExplained.whatHeIsDoing}
               </p>
             )}
@@ -217,9 +218,9 @@ export const AiAnalysisPage: React.FC = () => {
               ]
                 .filter(([, v]) => (v as number | null) != null)
                 .map(([label, value]) => (
-                  <div key={label as string} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
+                  <div key={label as string} className="p-2 rounded-lg bg-ink/[0.03] border border-ink/5 text-xs">
                     <span className="text-text-dim block">{label as string}</span>
-                    <span className="text-white font-semibold">{Number(value).toFixed(1)}</span>
+                    <span className="text-text-primary font-semibold">{Number(value).toFixed(1)}</span>
                   </div>
                 ))}
             </div>

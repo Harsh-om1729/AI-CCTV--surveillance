@@ -27,8 +27,8 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
   ) => {
     const variants = {
       default: 'card-3d rounded-2xl',
-      elevated: 'card-3d rounded-2xl bg-[#0b0e16] border-white/10 shadow-lg',
-      bordered: 'card-3d rounded-2xl border-white/15 shadow-md',
+      elevated: 'card-3d rounded-2xl bg-bg-surface border-ink/10 shadow-lg',
+      bordered: 'card-3d rounded-2xl border-ink/15 shadow-md',
     };
 
     const hasHeader = Boolean(title || subtitle || action);
@@ -44,7 +44,7 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
         {...props}
       >
         {hasHeader && (
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06] bg-[#07090f]">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-ink/[0.06] bg-bg-primary">
             <div className="space-y-0.5">
               {title && (
                 <div className="font-semibold text-sm tracking-tight text-text-primary flex items-center gap-2">
@@ -63,7 +63,7 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
         <div className={cn('p-5', bodyClassName)}>{children}</div>
 
         {footer && (
-          <div className="px-5 py-3.5 border-t border-white/[0.08] bg-black/40 text-xs text-text-dim flex items-center justify-between">
+          <div className="px-5 py-3.5 border-t border-ink/[0.08] bg-bg-elevated text-xs text-text-dim flex items-center justify-between">
             {footer}
           </div>
         )}

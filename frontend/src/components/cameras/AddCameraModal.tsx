@@ -213,7 +213,7 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({
                 className={`px-3 py-2 rounded-lg border text-xs font-semibold transition-colors ${
                   sourceType === val
                     ? 'bg-accent-teal/15 border-accent-teal text-accent-teal'
-                    : 'bg-bg-elevated border-border-subtle text-text-dim hover:text-white hover:border-white/25'
+                    : 'bg-bg-elevated border-border-subtle text-text-dim hover:text-text-primary hover:border-ink/25'
                 }`}
               >
                 {label}
@@ -263,7 +263,7 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({
             <div
               className={`mt-2 flex items-start gap-2 p-2.5 rounded-lg border text-xs ${
                 testState === 'testing'
-                  ? 'bg-white/5 border-white/10 text-text-dim'
+                  ? 'bg-ink/5 border-ink/10 text-text-dim'
                   : testState === 'ok'
                   ? 'bg-accent-green/10 border-accent-green/30 text-accent-green'
                   : 'bg-accent-red/10 border-accent-red/30 text-accent-red'

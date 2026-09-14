@@ -23,6 +23,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-red-${ts}`,
           cameraName,
           tier: 'red',
+          role: 'restricted',
           label: 'Restricted Perimeter Boundary',
           points: [
             { x: 0.05, y: 0.10 },
@@ -35,6 +36,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-yellow-${ts + 1}`,
           cameraName,
           tier: 'yellow',
+          role: 'buffer',
           direction: 'inward',
           label: 'Perimeter Approach Buffer',
           points: [
@@ -48,6 +50,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-green-${ts + 2}`,
           cameraName,
           tier: 'green',
+          role: 'authorized',
           label: 'Internal Patrol Corridor',
           points: [
             { x: 0.12, y: 0.72 },
@@ -72,6 +75,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-red-left-${ts}`,
           cameraName,
           tier: 'red',
+          role: 'restricted',
           label: 'West Barrier Flank',
           points: [
             { x: 0.02, y: 0.08 },
@@ -84,6 +88,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-red-right-${ts + 1}`,
           cameraName,
           tier: 'red',
+          role: 'restricted',
           label: 'East Barrier Flank',
           points: [
             { x: 0.72, y: 0.08 },
@@ -96,6 +101,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-yellow-${ts + 2}`,
           cameraName,
           tier: 'yellow',
+          role: 'buffer',
           direction: 'inward',
           label: 'Inbound Vehicle Approach Zone',
           points: [
@@ -109,6 +115,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-green-${ts + 3}`,
           cameraName,
           tier: 'green',
+          role: 'authorized',
           label: 'Authorized Gate Passage',
           points: [
             { x: 0.32, y: 0.55 },
@@ -133,6 +140,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-red-${ts}`,
           cameraName,
           tier: 'red',
+          role: 'restricted',
           label: 'Border Physical Fence Line',
           points: [
             { x: 0.04, y: 0.15 },
@@ -145,6 +153,7 @@ export const ZONE_PRESETS: ZonePreset[] = [
           id: `zone-${cameraName}-yellow-${ts + 1}`,
           cameraName,
           tier: 'yellow',
+          role: 'buffer',
           direction: 'inward',
           label: 'Immediate Stand-Off Buffer',
           points: [

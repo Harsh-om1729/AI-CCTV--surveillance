@@ -1,6 +1,7 @@
 import { safeFetch, ApiResponse } from './client';
+import { API_CONFIG } from './config';
 import type { Incident } from '@/lib/mockIncidents';
-import type { Zone } from '@/lib/mockZones';
+import type { Boundary, Zone, ZoneRole } from '@/lib/mockZones';
 import type { WatchlistPerson } from '@/lib/mockWatchlist';
 import {
   ThresholdSettings,
@@ -125,6 +126,121 @@ export const zonesApi = {
   },
 };
 
+// 3b. Zone policy — the configurable role -> severity-tier mapping. See
+// zones/zone_policy.py; ZoneEngine/ThreatScorer never see a role, only the
+// tier this resolves to.
+export const zonePolicyApi = {
+  async getPolicy(fallback: Record<ZoneRole, string> = {} as Record<ZoneRole, string>) {
+    return safeFetch<Record<ZoneRole, string>>('/zone-policy', { method: 'GET' }, fallback);
+  },
+
+  async savePolicy(mapping: Partial<Record<ZoneRole, string>>) {
+    return safeFetch<Record<ZoneRole, string>>('/zone-policy', { method: 'PUT', body: JSON.stringify(mapping) });
+  },
+};
+
+// 3c. Boundaries (virtual tripwires) — kept separate from zones; see
+// zones/boundary_engine.py. Detected and shown to the operator, not fed
+// into incidents.
+export const boundariesApi = {
+  async getBoundaries(fallback: Record<string, Boundary[]> = {}) {
+    return safeFetch<Record<string, Boundary[]>>('/boundaries', { method: 'GET' }, fallback);
+  },
+
+  async saveBoundaries(boundaries: Record<string, Boundary[]>) {
+    return safeFetch<Record<string, Boundary[]>>('/boundaries', { method: 'PUT', body: JSON.stringify(boundaries) });
+  },
+};
+
+// 3d. Offline video replay — upload a recorded clip and, once activated,
+// it's added to .env's CAMERA_SOURCES so the real AI pipeline analyses it
+// (a restart is required; see integration/api.py "Offline video replay").
+export interface ApiVideo {
+  id: string;
+  cameraId: string;
+  filename: string;
+  sizeBytes: number;
+  uploadedAt: string;
+  isActive: boolean;
+  needsRestart: boolean;
+}
+
+export interface VideoActivationResult {
+  cameraId: string;
+  needsRestart: boolean;
+}
+
+export const videosApi = {
+  async getVideos(fallback: ApiVideo[] = []): Promise<ApiResponse<ApiVideo[]>> {
+    return safeFetch<ApiVideo[]>('/videos', { method: 'GET' }, fallback);
+  },
+
+  /** Bespoke upload, not safeFetch: safeFetch hardcodes a 4s timeout and a
+   * JSON Content-Type, both wrong for a large binary video. Uses XHR (not
+   * fetch) so upload progress can be reported for a multi-hundred-MB file. */
+  uploadVideo(file: File, onProgress?: (pct: number) => void): Promise<ApiResponse<ApiVideo>> {
+    return new Promise((resolve) => {
+      const token = import.meta.env.VITE_API_TOKEN as string | undefined;
+      const url = `${API_CONFIG.baseUrl}/videos/upload?filename=${encodeURIComponent(file.name)}`;
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+      xhr.upload.onprogress = (event) => {
+        if (onProgress && event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      };
+
+      xhr.onload = () => {
+        let body: any = null;
+        try {
+          body = JSON.parse(xhr.responseText);
+        } catch {
+          // non-JSON body
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ data: body as ApiVideo, error: null, isFallback: false, status: xhr.status });
+        } else {
+          resolve({
+            data: null,
+            error: `HTTP ${xhr.status}: ${body?.detail || xhr.statusText || 'Upload failed'}`,
+            isFallback: true,
+            status: xhr.status,
+          });
+        }
+      };
+
+      xhr.onerror = () => {
+        resolve({ data: null, error: 'Network request failed', isFallback: true, status: null });
+      };
+
+      xhr.send(file);
+    });
+  },
+
+  async activateVideo(id: string): Promise<ApiResponse<VideoActivationResult>> {
+    return safeFetch<VideoActivationResult>(`/videos/${encodeURIComponent(id)}/activate`, {
+      method: 'POST',
+    });
+  },
+
+  async deactivateVideo(id: string): Promise<ApiResponse<VideoActivationResult>> {
+    return safeFetch<VideoActivationResult>(`/videos/${encodeURIComponent(id)}/deactivate`, {
+      method: 'POST',
+    });
+  },
+
+  async deleteVideo(
+    id: string
+  ): Promise<ApiResponse<{ success: boolean; id: string; needsRestart: boolean }>> {
+    return safeFetch<{ success: boolean; id: string; needsRestart: boolean }>(
+      `/videos/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    );
+  },
+};
+
 // 4. Watchlist
 export const watchlistApi = {
   async getWatchlist(fallback: WatchlistPerson[] = []): Promise<ApiResponse<WatchlistPerson[]>> {
@@ -235,6 +351,9 @@ export interface SystemHealth {
 export interface ApiMeta {
   resolutionReasons: string[];
   tierThresholds: { yellow: number; red: number };
+  // Per-zone sensitivity: each zone tier escalates at its own thresholds
+  // now, not one shared yellow/red pair — see ZONE_TIER_THRESHOLDS.
+  tierThresholdsByZone?: Record<'red' | 'yellow' | 'green' | 'none', { yellow: number; red: number }>;
   cameraResolution: string;
   livePublishFps: number;
 }

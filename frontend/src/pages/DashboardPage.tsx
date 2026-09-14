@@ -1,40 +1,29 @@
-import React, { useState } from 'react';
+import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Incident } from '@/lib/mockIncidents';
-import { incidentsApi } from '@/lib/api';
+import { apiAssetUrl, cameraStreamUrl, incidentsApi } from '@/lib/api';
 import { useBackendData } from '@/lib/useBackendData';
+import { threatStatusLabel, threatStatusVariant } from '@/lib/threatStatus';
 
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { EvidenceImage } from '@/components/ui/EvidenceImage';
 import { useAlerts } from '@/components/alerts/AlertProvider';
-import { describeCamera, useSystemHealth } from '@/components/system/SystemHealthProvider';
-import {
-  getDashboardStats,
-  getHourlyThreatTimeline,
-  getRealtimeThreatStream,
-} from '@/lib/analyticsUtils';
+import { useSystemHealth } from '@/components/system/SystemHealthProvider';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from 'recharts';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/Table';
+import { CameraTile } from '@/components/live';
+import { OfflineVideoPanel } from '@/components/dashboard/OfflineVideoPanel';
 import {
   Activity,
   ShieldAlert,
+  ShieldCheck,
   AlertTriangle,
+  Siren,
   Video,
   ArrowRight,
-  Clock,
-  Eye,
   User,
-  Car,
-  HelpCircle,
   Radio,
   Camera,
   ScanEye,
@@ -42,87 +31,14 @@ import {
   Footprints,
   Database,
   Play,
+  MapPin,
+  ChevronRight,
+  Cpu,
+  Wifi,
+  HardDrive,
+  Server,
+  CheckCircle2,
 } from 'lucide-react';
-
-const CustomDashboardTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className="p-3 bg-[#080a10] border border-[#1a1e2b] rounded-xl shadow-xl text-xs space-y-2 min-w-[160px]">
-        <div className="text-white font-bold border-b border-white/10 pb-1 flex items-center justify-between">
-          <span>{label}</span>
-          <span className="text-[10px] text-accent-teal font-mono uppercase">OBSERVATION</span>
-        </div>
-        <div className="space-y-1 font-medium font-mono text-[11px]">
-          <div className="flex items-center justify-between text-accent-red">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-              Critical:
-            </span>
-            <span className="font-bold">{payload.find((p: any) => p.dataKey === 'red')?.value || 0}</span>
-          </div>
-          <div className="flex items-center justify-between text-accent-yellow">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow" />
-              Caution:
-            </span>
-            <span className="font-bold">{payload.find((p: any) => p.dataKey === 'yellow')?.value || 0}</span>
-          </div>
-          <div className="flex items-center justify-between text-accent-green">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-              Normal:
-            </span>
-            <span className="font-bold">{payload.find((p: any) => p.dataKey === 'green')?.value || 0}</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return null;
-};
-
-const CustomRealtimeTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    const tierColor =
-      data.tier === 'red' ? 'text-accent-red' : data.tier === 'yellow' ? 'text-accent-yellow' : 'text-accent-green';
-
-    return (
-      <div className="p-3 bg-[#080a10] border border-[#1a1e2b] rounded-xl shadow-xl text-xs space-y-1.5 min-w-[190px]">
-        <div className="text-white font-bold border-b border-white/10 pb-1 flex items-center justify-between">
-          <span className="font-mono text-accent-teal">#TRK-{data.trackId}</span>
-          <span className="text-[10px] text-text-muted font-mono">{data.timeLabel}</span>
-        </div>
-        <div className="space-y-1 font-mono text-[11px]">
-          <div className="flex items-center justify-between">
-            <span className="text-text-dim">Camera:</span>
-            <span className="font-bold text-white uppercase">{data.cameraName}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-text-dim">Category:</span>
-            <span className="font-semibold text-white capitalize">{data.category}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-text-dim">Tier:</span>
-            <span className={`font-bold ${tierColor}`}>{data.tier.toUpperCase()}</span>
-          </div>
-          <div className="flex items-center justify-between border-t border-white/10 pt-1">
-            <span className="text-text-dim font-bold">Threat Score:</span>
-            <span className={`font-bold text-xs ${tierColor}`}>{data.threatScore.toFixed(1)} / 100</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return null;
-};
-
-const RenderRealtimeDot = (props: any) => {
-  const { cx, cy, payload } = props;
-  if (!cx || !cy) return null;
-  const color = payload.tier === 'red' ? '#f02555' : payload.tier === 'yellow' ? '#f09f00' : '#00e077';
-  return <circle cx={cx} cy={cy} r={4} fill={color} stroke="#05070a" strokeWidth={1.5} />;
-};
 
 // The system in one glance, in the order data actually flows. Each chip
 // links to the page that goes deeper on that stage — this is what lets a
@@ -136,11 +52,83 @@ const PIPELINE_STAGES = [
   { label: 'Evidence / Log', icon: Database, to: '/alerts' },
 ] as const;
 
+const tierTextClass = (tier: 'green' | 'yellow' | 'red') =>
+  tier === 'red' ? 'text-accent-red' : tier === 'yellow' ? 'text-accent-yellow' : 'text-accent-green';
+
+// Four near-identical stat cards — one small component beats four copies of
+// the same border/icon-box markup.
+const KpiCard: React.FC<{
+  label: string;
+  value: React.ReactNode;
+  sublabel: React.ReactNode;
+  icon: React.ElementType;
+  tone: 'teal' | 'green' | 'yellow' | 'red';
+}> = ({ label, value, sublabel, icon: Icon, tone }) => {
+  const toneCls = {
+    teal: { border: 'border-t-accent-teal', icon: 'text-accent-teal', value: 'text-text-primary' },
+    green: { border: 'border-t-accent-green', icon: 'text-accent-green', value: 'text-accent-green' },
+    yellow: { border: 'border-t-accent-yellow', icon: 'text-accent-yellow', value: 'text-accent-yellow' },
+    red: { border: 'border-t-accent-red', icon: 'text-accent-red', value: 'text-accent-red' },
+  }[tone];
+  return (
+    <Card variant="default" className={`border-t-2 ${toneCls.border} ${tone === 'red' ? 'bg-accent-red/[0.04]' : ''}`}>
+      <div className="flex items-start justify-between">
+        <div className="space-y-1">
+          <span className="text-xs font-semibold text-text-dim uppercase tracking-wider block">{label}</span>
+          <span className={`text-3xl font-bold tracking-tight block ${toneCls.value}`}>{value}</span>
+          <span className="text-[11px] text-text-muted font-medium">{sublabel}</span>
+        </div>
+        <div className={`w-10 h-10 rounded-xl bg-bg-elevated border border-ink/10 flex items-center justify-center shrink-0 ${toneCls.icon}`}>
+          <Icon className="w-5 h-5" />
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+const StatChip: React.FC<{ label: string; value: React.ReactNode; icon: React.ElementType; valueClassName?: string }> = ({
+  label,
+  value,
+  icon: Icon,
+  valueClassName,
+}) => (
+  <div className="p-2.5 rounded-xl bg-bg-surface border border-ink/[0.06] space-y-0.5 min-w-0">
+    <span className="flex items-center gap-1.5 text-[10px] text-text-dim uppercase tracking-wider">
+      <Icon className="w-3 h-3 shrink-0" /> {label}
+    </span>
+    <span className={`block text-sm font-bold font-mono truncate ${valueClassName ?? 'text-text-primary'}`}>{value}</span>
+  </div>
+);
+
+const StatusRow: React.FC<{
+  icon: React.ElementType;
+  label: string;
+  ok: boolean;
+  okLabel: string;
+  badLabel: string;
+  unknown?: boolean;
+}> = ({ icon: Icon, label, ok, okLabel, badLabel, unknown }) => (
+  <div className="flex items-center justify-between text-xs">
+    <span className="flex items-center gap-1.5 text-text-dim">
+      <Icon className="w-3.5 h-3.5" />
+      {label}
+    </span>
+    <span
+      className={`flex items-center gap-1.5 font-mono font-semibold ${
+        unknown ? 'text-text-muted' : ok ? 'text-accent-green' : 'text-accent-red'
+      }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${unknown ? 'bg-text-muted' : ok ? 'bg-accent-green' : 'bg-accent-red'}`} />
+      {unknown ? 'Checking…' : ok ? okLabel : badLabel}
+    </span>
+  </div>
+);
+
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { alerts, backendStatus } = useAlerts();
   const { health, cameras, reachable } = useSystemHealth();
-  const { data: stored, setData: setStored, isMock, error } = useBackendData<Incident[]>(() => incidentsApi.getIncidents(), []);
+  const { data: stored, isMock, error } = useBackendData<Incident[]>(() => incidentsApi.getIncidents(), []);
 
   // WebSocket alerts are already rows in the database, so key by id instead
   // of stacking them on top of the fetch.
@@ -151,52 +139,58 @@ export const DashboardPage: React.FC = () => {
     return Array.from(byId.values()).sort((a, b) => b.id - a.id);
   }, [stored, alerts]);
 
-  const [chartMode, setChartMode] = useState<'realtime' | '24h'>('realtime');
-
-  const handleAcknowledge = async (id: number) => {
-    const res = await incidentsApi.acknowledgeIncident(id);
-    if (!res.isFallback) {
-      setStored((prev) => prev.map((i) => (i.id === id ? { ...i, status: 'acknowledged' } : i)));
-    }
-  };
-  const handleResolve = async (id: number) => {
-    const res = await incidentsApi.resolveIncident(id, 'genuine_intrusion');
-    if (!res.isFallback && res.data) {
-      const updated = res.data;
-      setStored((prev) => prev.map((i) => (i.id === id ? { ...i, ...updated } : i)));
-    }
-  };
-
-  const stats = getDashboardStats(activeAlerts);
-  const timelineData = getHourlyThreatTimeline(activeAlerts);
-  const realtimeStream = getRealtimeThreatStream(activeAlerts, 14);
-  const latestAlert = activeAlerts[0];
-
-  const openList = activeAlerts.filter((i) => (i.status ?? 'open') === 'open');
-  const openTotal = health?.database.open ?? openList.length;
-  const openRed = health?.database.openRed ?? openList.filter((i) => i.tier === 'red').length;
-  const openYellow = health?.database.openYellow ?? openList.filter((i) => i.tier === 'yellow').length;
-  const liveCams = cameras.filter((c) => c.health === 'online' && c.source !== 'idle').length;
   const pipelineRunning = Boolean(health?.pipeline.running);
+  const serverNow = health?.checkedAt ?? null;
+  const liveCams = cameras.filter((c) => c.health === 'online' && c.source !== 'idle').length;
 
-  const recentCriticalAlerts = activeAlerts
-    .filter((i) => i.tier === 'red' || i.tier === 'yellow')
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, 5);
+  const camerasWithStream = useMemo(
+    () => cameras.map((c) => ({ ...c, streamUrl: cameraStreamUrl(c.id) })),
+    [cameras]
+  );
+  const normalCams = camerasWithStream.filter((c) => c.maxTier !== 'red' && c.maxTier !== 'yellow').length;
+  const watchCams = camerasWithStream.filter((c) => c.maxTier === 'yellow').length;
+  const criticalCams = camerasWithStream.filter((c) => c.maxTier === 'red').length;
+
+  const gridCameras = camerasWithStream.slice(0, 6);
+  const extraCameraCount = camerasWithStream.length - gridCameras.length;
+
+  const latestAlert = activeAlerts[0];
+  const alertReasons: string[] = useMemo(() => {
+    if (!latestAlert) return [];
+    const recorded = latestAlert.breakdown?.threatReasons;
+    if (recorded && recorded.length) return recorded;
+    const fallback: string[] = [];
+    if (latestAlert.whatHeIsDoing) fallback.push(latestAlert.whatHeIsDoing);
+    if (latestAlert.direction) fallback.push(`Movement direction: ${latestAlert.direction}`);
+    if (latestAlert.zoneTier && latestAlert.zoneTier !== 'none') {
+      fallback.push(`Detected inside the ${latestAlert.zoneTier.toUpperCase()} zone`);
+    }
+    if (latestAlert.threatLevel) fallback.push(`Threat level: ${latestAlert.threatLevel}`);
+    return fallback;
+  }, [latestAlert]);
+
+  const recentIncidents = useMemo(
+    () => [...activeAlerts].sort((a, b) => b.timestamp - a.timestamp).slice(0, 6),
+    [activeAlerts]
+  );
 
   const formatTime = (ts: number) => {
     const d = new Date(ts * 1000);
     return d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
+  const diskPct = health?.disk.percentUsed ?? 0;
+  const diskTone = diskPct > 90 ? 'bg-accent-red' : diskPct > 75 ? 'bg-accent-yellow' : 'bg-accent-teal';
+  const allSystemsOk = reachable === true && pipelineRunning && (health?.database.ok ?? false) && backendStatus === 'connected';
+
   return (
     <div className="space-y-5">
       {/* Header + "how it works" strip — orients a first-time viewer before
           any numbers are shown. */}
-      <div className="bg-[#0b0e17] border border-[#1b2234] rounded-2xl p-4 shadow-lg space-y-4">
+      <div className="bg-bg-surface border border-border-subtle rounded-2xl p-4 shadow-lg space-y-4">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            <h1 className="text-lg font-bold tracking-tight text-text-primary flex items-center gap-2">
               <span>IBVAP — Border Video Analytics Overview</span>
               <DataSourceBadge isMock={isMock} error={error} />
             </h1>
@@ -218,14 +212,14 @@ export const DashboardPage: React.FC = () => {
                   onClick={() => navigate(stage.to)}
                   className="flex flex-col items-center gap-1 shrink-0 px-2 group min-w-[86px]"
                 >
-                  <div className="w-9 h-9 rounded-full border border-white/15 bg-white/[0.03] flex items-center justify-center text-accent-teal group-hover:border-accent-teal/50 group-hover:bg-accent-teal/10 transition-colors">
+                  <div className="w-9 h-9 rounded-full border border-ink/15 bg-ink/[0.03] flex items-center justify-center text-accent-teal group-hover:border-accent-teal/50 group-hover:bg-accent-teal/10 transition-colors">
                     <Icon className="w-4 h-4" />
                   </div>
-                  <span className="text-[10px] text-text-dim group-hover:text-white text-center leading-tight">
+                  <span className="text-[10px] text-text-dim group-hover:text-text-primary text-center leading-tight">
                     {stage.label}
                   </span>
                 </button>
-                {i < PIPELINE_STAGES.length - 1 && <div className="h-px flex-1 min-w-[10px] bg-white/10" />}
+                {i < PIPELINE_STAGES.length - 1 && <div className="h-px flex-1 min-w-[10px] bg-ink/10" />}
               </React.Fragment>
             );
           })}
@@ -247,370 +241,332 @@ export const DashboardPage: React.FC = () => {
       )}
 
       <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-        <span className="flex items-center gap-2 bg-[#0a0d14] px-3 py-1.5 rounded-lg border border-[#161924]">
+        <span className="flex items-center gap-2 bg-bg-surface px-3 py-1.5 rounded-lg border border-border-subtle">
           <span className={`w-2 h-2 rounded-full ${pipelineRunning ? 'bg-accent-green' : 'bg-accent-yellow'}`} />
           {pipelineRunning ? 'AI PIPELINE RUNNING' : 'AI PIPELINE STOPPED'}
         </span>
-        <span className="flex items-center gap-2 bg-[#0a0d14] px-3 py-1.5 rounded-lg border border-[#161924]">
+        <span className="flex items-center gap-2 bg-bg-surface px-3 py-1.5 rounded-lg border border-border-subtle">
           <span className={`w-2 h-2 rounded-full ${backendStatus === 'connected' ? 'bg-accent-green' : 'bg-accent-yellow'}`} />
           {backendStatus === 'connected' ? 'ALERT FEED LIVE' : 'ALERT FEED RECONNECTING'}
         </span>
       </div>
 
-      {/* KPI Stat Cards */}
+      {/* KPI Stat Cards — per-camera status, not incident counts, so this
+          reads at a glance the same way a wall display would. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card variant="default" className="border-t-2 border-t-accent-teal">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-xs font-semibold text-text-dim uppercase tracking-wider block">Open Incidents</span>
-              <span className="text-3xl font-bold tracking-tight text-white block">{openTotal}</span>
-              <span className="text-[11px] text-text-muted font-medium">
-                Awaiting acknowledgement · {health?.database.total ?? stats.totalIncidents} recorded
-              </span>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-[#0e121c] border border-white/10 text-accent-teal flex items-center justify-center">
-              <Activity className="w-5 h-5" />
-            </div>
-          </div>
-        </Card>
-
-        <Card variant="default" className="border-t-2 border-t-accent-red">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-xs font-semibold text-text-dim uppercase tracking-wider block">Critical Threats</span>
-              <span className="text-3xl font-bold tracking-tight text-accent-red block">{openRed}</span>
-              <span className="text-[11px] text-accent-red/80 font-medium">Open RED — immediate response</span>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-[#0e121c] border border-white/10 text-accent-red flex items-center justify-center">
-              <ShieldAlert className="w-5 h-5" />
-            </div>
-          </div>
-        </Card>
-
-        <Card variant="default" className="border-t-2 border-t-accent-yellow">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-xs font-semibold text-text-dim uppercase tracking-wider block">Caution Alerts</span>
-              <span className="text-3xl font-bold tracking-tight text-accent-yellow block">{openYellow}</span>
-              <span className="text-[11px] text-text-muted font-medium">Open YELLOW in the loaded history</span>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-[#0e121c] border border-white/10 text-accent-yellow flex items-center justify-center">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-          </div>
-        </Card>
-
-        <Card variant="default" className="border-t-2 border-t-accent-green">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-xs font-semibold text-text-dim uppercase tracking-wider block">Cameras Live</span>
-              <span
-                className={`text-3xl font-bold tracking-tight block ${
-                  cameras.length > 0 && liveCams === cameras.length ? 'text-accent-green' : 'text-accent-yellow'
-                }`}
-              >
-                {liveCams} / {cameras.length}
-              </span>
-              <span className="text-[11px] text-text-muted font-medium">
-                {reachable === false
-                  ? 'Backend offline — status unknown'
-                  : pipelineRunning
-                  ? 'Analysed by the AI pipeline'
-                  : 'Pipeline stopped — not analysed'}
-              </span>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-[#0e121c] border border-white/10 text-accent-green flex items-center justify-center">
-              <Video className="w-5 h-5" />
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      {/* Threat graph + camera status */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        <Card
-          className="lg:col-span-8"
-          title={
-            <div className="flex items-center gap-2">
-              <Radio className="w-4 h-4 text-accent-teal" />
-              <span>Threat Activity Graph</span>
-            </div>
-          }
-          subtitle={
-            chartMode === 'realtime'
-              ? 'Synchronized live threat scores for each incoming alert'
-              : 'Hourly threat density across perimeter observation zones'
-          }
-          action={
-            <div className="flex items-center gap-3 text-xs">
-              <div className="flex items-center p-0.5 rounded-lg bg-[#07090f] border border-[#161924]">
-                <button
-                  onClick={() => setChartMode('realtime')}
-                  className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition-colors ${
-                    chartMode === 'realtime' ? 'bg-[#141a29] text-white border border-white/10' : 'text-text-muted hover:text-white'
-                  }`}
-                >
-                  Live Stream
-                </button>
-                <button
-                  onClick={() => setChartMode('24h')}
-                  className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition-colors ${
-                    chartMode === '24h' ? 'bg-[#141a29] text-white border border-white/10' : 'text-text-muted hover:text-white'
-                  }`}
-                >
-                  24H Trend
-                </button>
-              </div>
-            </div>
-          }
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 mb-2 rounded-lg bg-[#07090f] border border-[#161924] text-xs font-mono">
-            <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${backendStatus === 'connected' ? 'bg-accent-green' : 'bg-accent-yellow'}`} />
-              <span className={`font-semibold ${backendStatus === 'connected' ? 'text-accent-green' : 'text-accent-yellow'}`}>
-                {backendStatus === 'connected' ? 'NEW ALERTS APPEAR LIVE' : 'ALERT FEED RECONNECTING'}
-              </span>
-              <span className="text-text-dim text-[11px]">({activeAlerts.length} incidents loaded)</span>
-            </div>
-            {latestAlert && (
-              <div className="flex items-center gap-1.5 text-[11px] text-text-dim">
-                <span>Latest Alert:</span>
-                <span className="font-bold text-white uppercase">{latestAlert.cameraName}</span>
-                <span
-                  className={`font-bold px-1.5 py-0.2 rounded text-[10px] ${
-                    latestAlert.tier === 'red'
-                      ? 'bg-accent-red/20 text-accent-red border border-accent-red/30'
-                      : latestAlert.tier === 'yellow'
-                      ? 'bg-accent-yellow/20 text-accent-yellow border border-accent-yellow/30'
-                      : 'bg-accent-green/20 text-accent-green border border-accent-green/30'
-                  }`}
-                >
-                  {latestAlert.tier.toUpperCase()}
-                </span>
-                <span className="text-white font-bold">(Score: {latestAlert.score.toFixed(1)})</span>
-              </div>
-            )}
-          </div>
-
-          <div className="h-72 w-full pt-1">
-            <ResponsiveContainer width="100%" height="100%">
-              {chartMode === 'realtime' ? (
-                <AreaChart data={realtimeStream} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorThreatScore" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#00d2df" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#00d2df" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#131622" vertical={false} />
-                  <XAxis dataKey="timeLabel" stroke="#4b5563" tick={{ fill: '#8c98a8', fontSize: 10 }} axisLine={{ stroke: '#161924' }} />
-                  <YAxis domain={[0, 100]} stroke="#4b5563" tick={{ fill: '#8c98a8', fontSize: 10 }} axisLine={{ stroke: '#161924' }} allowDecimals={false} />
-                  <Tooltip content={<CustomRealtimeTooltip />} />
-                  <Area
-                    type="monotone"
-                    dataKey="threatScore"
-                    stroke="#00d2df"
-                    strokeWidth={2}
-                    fillOpacity={1}
-                    fill="url(#colorThreatScore)"
-                    isAnimationActive={false}
-                    dot={<RenderRealtimeDot />}
-                  />
-                </AreaChart>
-              ) : (
-                <AreaChart data={timelineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorRed" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f02555" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#f02555" stopOpacity={0.0} />
-                    </linearGradient>
-                    <linearGradient id="colorYellow" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f09f00" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#f09f00" stopOpacity={0.0} />
-                    </linearGradient>
-                    <linearGradient id="colorGreen" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#00e077" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#00e077" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#131622" vertical={false} />
-                  <XAxis dataKey="timeLabel" stroke="#4b5563" tick={{ fill: '#8c98a8', fontSize: 10 }} axisLine={{ stroke: '#161924' }} />
-                  <YAxis stroke="#4b5563" tick={{ fill: '#8c98a8', fontSize: 10 }} axisLine={{ stroke: '#161924' }} allowDecimals={false} />
-                  <Tooltip content={<CustomDashboardTooltip />} />
-                  <Area type="monotone" dataKey="red" stroke="#f02555" strokeWidth={2} fillOpacity={1} fill="url(#colorRed)" isAnimationActive={false} />
-                  <Area type="monotone" dataKey="yellow" stroke="#f09f00" strokeWidth={2} fillOpacity={1} fill="url(#colorYellow)" isAnimationActive={false} />
-                  <Area type="monotone" dataKey="green" stroke="#00e077" strokeWidth={2} fillOpacity={1} fill="url(#colorGreen)" isAnimationActive={false} />
-                </AreaChart>
+        <KpiCard
+          label="Total Cameras"
+          icon={Video}
+          tone="teal"
+          value={cameras.length}
+          sublabel={
+            <>
+              <span className="text-accent-green font-semibold">{liveCams} Online</span>
+              {cameras.length - liveCams > 0 && (
+                <>
+                  {' '}
+                  · <span className="text-accent-red font-semibold">{cameras.length - liveCams} Offline</span>
+                </>
               )}
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card
-          className="lg:col-span-4 flex flex-col justify-between"
-          title="Camera Status"
-          subtitle={pipelineRunning ? 'Analysed by the AI pipeline' : 'AI pipeline stopped — preview only'}
-          action={
-            <Badge variant={cameras.length > 0 && liveCams === cameras.length ? 'green' : 'yellow'} dot size="sm">
-              {liveCams}/{cameras.length} live
-            </Badge>
+            </>
           }
-          footer={
-            <div className="flex gap-2 w-full">
-              <Button variant="secondary" size="sm" className="flex-1 justify-between text-xs" rightIcon={<ArrowRight className="w-3.5 h-3.5" />} onClick={() => navigate('/live')}>
-                Live Feeds
-              </Button>
-              <Button variant="ghost" size="sm" className="flex-1 justify-between text-xs" rightIcon={<ArrowRight className="w-3.5 h-3.5" />} onClick={() => navigate('/cameras')}>
-                Manage
-              </Button>
-            </div>
-          }
-        >
-          <div className="space-y-2.5">
-            {cameras.length === 0 ? (
-              <div className="p-4 text-center text-xs text-text-dim font-mono">
-                {reachable === false
-                  ? 'Backend offline — camera status unknown.'
-                  : 'No cameras configured. Set CAMERA_SOURCES in .env or use Camera Management.'}
-              </div>
-            ) : (
-              cameras.map((cam) => {
-                const st = describeCamera(cam, reachable);
-                const dot = { green: 'bg-accent-green', yellow: 'bg-accent-yellow', red: 'bg-accent-red', muted: 'bg-text-muted' }[st.tone];
-                return (
-                  <button
-                    type="button"
-                    key={cam.id}
-                    onClick={() => navigate(`/live?camera=${cam.id}`)}
-                    className="w-full text-left p-3 rounded-xl bg-[#090c12] border border-white/[0.06] hover:border-white/20 transition-colors flex items-center justify-between gap-2 group"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-[#0e121c] border border-white/10 flex items-center justify-center text-accent-teal shrink-0">
-                        <Video className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 space-y-0.5">
-                        <span className="text-xs font-semibold text-white truncate block uppercase">{cam.name}</span>
-                        <span className="text-[11px] text-text-dim truncate block">{cam.location}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 text-[11px] font-mono">
-                      {cam.source !== 'idle' && <span className="text-accent-teal font-semibold">{cam.fps} FPS</span>}
-                      <span className="text-text-dim hidden xl:inline">{st.label}</span>
-                      <span className={`inline-flex rounded-full h-2 w-2 ${dot}`} aria-label={st.label} />
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </Card>
+        />
+        <KpiCard label="Normal" icon={ShieldCheck} tone="green" value={normalCams} sublabel="No immediate threat" />
+        <KpiCard label="Under Watch" icon={AlertTriangle} tone="yellow" value={watchCams} sublabel="Needs attention" />
+        <KpiCard label="Critical" icon={Siren} tone="red" value={criticalCams} sublabel="Immediate action" />
       </div>
 
-      {/* Recent Critical Alerts */}
+      {/* Live Camera Feeds */}
+      <Card
+        title={
+          <div className="flex items-center gap-2">
+            <Video className="w-4 h-4 text-accent-teal" />
+            <span>Live Camera Feeds</span>
+          </div>
+        }
+        subtitle={`${liveCams}/${cameras.length} online — click a feed to open it`}
+        action={
+          <Button variant="ghost" size="sm" className="text-xs" rightIcon={<ArrowRight className="w-3.5 h-3.5" />} onClick={() => navigate('/live')}>
+            View All
+          </Button>
+        }
+      >
+        {gridCameras.length === 0 ? (
+          <div className="p-8 text-center text-xs text-text-dim font-mono">
+            {reachable === false ? 'Backend offline — camera status unknown.' : 'No cameras configured. Set CAMERA_SOURCES in .env or use Camera Management.'}
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {gridCameras.map((cam) => (
+                <div key={cam.id} onClick={() => navigate(`/live?camera=${cam.id}`)} className="cursor-pointer">
+                  <CameraTile
+                    cameraName={cam.name}
+                    streamUrl={cam.streamUrl}
+                    fps={cam.fps}
+                    source={cam.source}
+                    health={cam.health}
+                    zones={cam.zones}
+                    detections={cam.detections}
+                    maxTier={cam.maxTier}
+                    lastFrameAt={cam.lastFrameAt}
+                    serverNow={serverNow}
+                    onToggleFocus={() => navigate(`/live?camera=${cam.id}`)}
+                  />
+                </div>
+              ))}
+            </div>
+            {extraCameraCount > 0 && (
+              <button
+                onClick={() => navigate('/live')}
+                className="mt-3 w-full text-center text-[11px] font-mono text-text-dim hover:text-text-primary py-2 rounded-lg border border-dashed border-ink/10 hover:border-ink/25 transition-colors"
+              >
+                +{extraCameraCount} more camera{extraCameraCount === 1 ? '' : 's'} — View All
+              </button>
+            )}
+          </>
+        )}
+      </Card>
+
+      {/* Offline Video Analysis — upload a recorded clip and activate it so
+          the real AI pipeline analyses it, same as a live camera. */}
+      <OfflineVideoPanel />
+
+      {/* Latest Alert / threat reasoning */}
       <Card
         title={
           <div className="flex items-center gap-2">
             <ShieldAlert className="w-4 h-4 text-accent-red" />
-            <span className="text-sm font-bold tracking-tight">Recent Critical Alerts</span>
+            <span>Latest Alert</span>
           </div>
         }
-        subtitle="Most recent caution and critical alerts — open one for evidence and actions"
+        subtitle={latestAlert ? `#TRK-${latestAlert.trackId} on ${latestAlert.cameraName}` : 'No alerts recorded yet'}
         action={
-          <Button variant="secondary" size="sm" className="text-xs h-7 px-3 font-mono" rightIcon={<ArrowRight className="w-3.5 h-3.5" />} onClick={() => navigate('/alerts')}>
-            All Alerts
-          </Button>
+          latestAlert && (
+            <Badge variant={threatStatusVariant(latestAlert.tier)} size="sm">
+              {threatStatusLabel(latestAlert.tier)}
+            </Badge>
+          )
         }
       >
-        <div className="space-y-2">
-          {recentCriticalAlerts.length === 0 ? (
-            <div className="p-6 text-center text-xs text-text-dim font-mono">
-              🟢 No recent critical alerts — border perimeters secure.
-            </div>
-          ) : (
-            recentCriticalAlerts.map((alert) => (
-              <div
-                key={alert.id}
-                onClick={() => navigate(`/alerts?incident=${alert.id}`)}
-                className="p-3 bg-[#090c12] border border-white/[0.06] border-l-2 border-l-accent-red hover:border-white/20 transition-colors rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-2.5 cursor-pointer group"
-              >
-                <div className="flex flex-wrap items-center gap-2 min-w-0">
-                  <span
-                    className={`px-1.5 py-0.5 rounded font-mono text-[10px] font-bold tracking-wider ${
-                      alert.tier === 'red' ? 'bg-accent-red/20 text-accent-red border border-accent-red/30' : 'bg-accent-yellow/20 text-accent-yellow border border-accent-yellow/30'
-                    }`}
-                  >
-                    {alert.tier === 'red' ? 'CRITICAL' : 'CAUTION'}
-                  </span>
-                  <div className="flex items-center gap-1 text-[11px] text-text-dim font-mono">
-                    <Clock className="w-3 h-3 text-text-muted" />
-                    <span>{formatTime(alert.timestamp)}</span>
-                  </div>
-                  <span className="text-[11px] font-mono font-bold text-white uppercase px-2 py-0.5 rounded bg-black/40 border border-white/10">
-                    {alert.cameraName}
-                  </span>
-                  {alert.category === 'person' && (
-                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-accent-teal bg-accent-teal/10 px-2 py-0.5 rounded border border-accent-teal/30">
-                      <User className="w-3 h-3" /> Person
-                    </span>
-                  )}
-                  {alert.category === 'vehicle' && (
-                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-accent-yellow bg-accent-yellow/10 px-2 py-0.5 rounded border border-accent-yellow/30">
-                      <Car className="w-3 h-3" /> Vehicle
-                    </span>
-                  )}
-                  {alert.category === 'unknown' && (
-                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-text-muted bg-white/[0.04] px-2 py-0.5 rounded border border-white/10">
-                      <HelpCircle className="w-3 h-3" /> Unknown
-                    </span>
-                  )}
-                  <span className="text-[11px] font-mono text-accent-teal/80">#TRK-{alert.trackId}</span>
-                  {alert.whatHeIsDoing && (
-                    <span className="text-[11px] text-text-dim truncate max-w-xs hidden lg:inline">{alert.whatHeIsDoing}</span>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between md:justify-end gap-2 shrink-0">
-                  <span className="text-[11px] font-mono text-text-muted">
-                    Score: <span className={`font-bold ${alert.tier === 'red' ? 'text-accent-red' : 'text-accent-yellow'}`}>{alert.score.toFixed(1)}</span>
-                  </span>
-                  {(alert.status ?? 'open') === 'open' && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAcknowledge(alert.id);
-                      }}
-                      className="px-2 py-1 rounded bg-white/[0.04] hover:bg-white/[0.08] text-text-dim hover:text-white border border-white/10 transition-colors font-mono text-[10px] font-semibold"
-                    >
-                      Acknowledge
-                    </button>
-                  )}
-                  {alert.status !== 'resolved' && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleResolve(alert.id);
-                      }}
-                      className="px-2 py-1 rounded bg-accent-green/15 hover:bg-accent-green/25 text-accent-green border border-accent-green/30 transition-colors font-mono text-[10px] font-semibold"
-                    >
-                      Resolve
-                    </button>
-                  )}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/alerts?incident=${alert.id}`);
-                    }}
-                    className="px-2.5 py-1 rounded bg-white/[0.04] hover:bg-white/[0.08] text-text-dim hover:text-white border border-white/10 transition-colors font-mono text-[10px] font-semibold flex items-center gap-1"
-                  >
-                    <Eye className="w-3 h-3" />
-                    <span>Evidence</span>
-                  </button>
-                </div>
+        {!latestAlert ? (
+          <div className="p-6 text-center text-xs text-text-dim font-mono">🟢 No alerts recorded — border perimeters secure.</div>
+        ) : (
+          <div className="flex flex-col md:flex-row gap-5">
+            <div className="flex-1 space-y-3.5 min-w-0">
+              {/* The reason this fired is the headline — an operator should
+                  be able to tell what's wrong without reading a score. */}
+              <div>
+                <h3 className="text-lg font-bold text-text-primary capitalize leading-snug">
+                  {latestAlert.category} detected
+                  {latestAlert.zoneTier !== 'none' ? ` in the ${latestAlert.zoneTier} zone` : ''}
+                </h3>
+                {latestAlert.whatHeIsDoing && (
+                  <p className="text-sm text-text-primary/90 mt-1 leading-relaxed">{latestAlert.whatHeIsDoing}</p>
+                )}
               </div>
-            ))
-          )}
-        </div>
+
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-bold text-text-dim uppercase tracking-wider">Why is this a threat?</span>
+                {alertReasons.length === 0 ? (
+                  <p className="text-xs text-text-muted font-mono">No scoring breakdown recorded for this incident.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {alertReasons.map((reason, i) => (
+                      <li key={i} className="flex items-start gap-1.5 text-xs text-text-dim">
+                        <ChevronRight className="w-3.5 h-3.5 mt-0.5 text-accent-teal shrink-0" />
+                        <span>{reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Supporting numbers — deliberately smaller and after the
+                  reason, not before it. */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <StatChip label="Track ID" value={`#${latestAlert.trackId}`} icon={User} />
+                <StatChip label="Camera" value={latestAlert.cameraName} icon={Camera} />
+                <StatChip
+                  label="Zone"
+                  value={latestAlert.zoneTier === 'none' ? '—' : `${latestAlert.zoneTier}${latestAlert.direction ? ` (${latestAlert.direction})` : ''}`}
+                  icon={MapPin}
+                  valueClassName={latestAlert.zoneTier !== 'none' ? tierTextClass(latestAlert.zoneTier as 'green' | 'yellow' | 'red') : undefined}
+                />
+                <StatChip
+                  label="Threat Score"
+                  value={`${latestAlert.score.toFixed(0)} / 100`}
+                  icon={Activity}
+                  valueClassName={tierTextClass(latestAlert.tier)}
+                />
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="text-xs"
+                rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
+                onClick={() => navigate(`/alerts?incident=${latestAlert.id}`)}
+              >
+                Open in Alerts &amp; Events
+              </Button>
+            </div>
+
+            <div className="w-full md:w-64 shrink-0">
+              <EvidenceImage
+                src={apiAssetUrl(latestAlert.cropUrl ?? latestAlert.snapshotUrl)}
+                alt={`Evidence for track ${latestAlert.trackId}`}
+                className="w-full aspect-video object-cover rounded-xl border border-ink/10"
+              />
+            </div>
+          </div>
+        )}
       </Card>
+
+      {/* Recent Incidents + Border Overview + System Status */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        <div className="lg:col-span-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+              <Database className="w-4 h-4 text-accent-teal" />
+              Recent Incidents
+            </h2>
+            <Button variant="ghost" size="sm" className="text-xs" rightIcon={<ArrowRight className="w-3.5 h-3.5" />} onClick={() => navigate('/alerts')}>
+              View All
+            </Button>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow isHoverable={false}>
+                <TableHead>Time</TableHead>
+                <TableHead>Camera</TableHead>
+                <TableHead>Event</TableHead>
+                <TableHead>Zone</TableHead>
+                <TableHead>Threat</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {recentIncidents.length === 0 ? (
+                <TableRow isHoverable={false}>
+                  <TableCell colSpan={6} className="text-center text-text-dim font-mono text-xs py-6">
+                    No incidents recorded yet
+                  </TableCell>
+                </TableRow>
+              ) : (
+                recentIncidents.map((inc) => (
+                  <TableRow key={inc.id} className="cursor-pointer" onClick={() => navigate(`/alerts?incident=${inc.id}`)}>
+                    <TableCell className="font-mono text-xs text-text-dim whitespace-nowrap">{formatTime(inc.timestamp)}</TableCell>
+                    <TableCell className="font-mono text-xs font-bold text-text-primary uppercase">{inc.cameraName}</TableCell>
+                    <TableCell className="text-xs text-text-primary truncate max-w-[260px]" title={inc.whatHeIsDoing || undefined}>
+                      {inc.whatHeIsDoing || `${inc.category} detected`}
+                    </TableCell>
+                    <TableCell>
+                      <span className={`text-xs font-mono font-semibold ${inc.zoneTier !== 'none' ? tierTextClass(inc.zoneTier as 'green' | 'yellow' | 'red') : 'text-text-dim'}`}>
+                        {inc.zoneTier === 'none' ? '—' : inc.zoneTier.toUpperCase()}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-text-dim">{inc.score.toFixed(0)}</TableCell>
+                    <TableCell>
+                      <Badge size="sm" variant={threatStatusVariant(inc.tier)}>
+                        {threatStatusLabel(inc.tier)}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="lg:col-span-4 space-y-3">
+          <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-accent-teal" />
+            Border Overview
+          </h2>
+          <Card bodyClassName="p-4">
+            <div className="relative w-full aspect-[4/3] rounded-xl bg-bg-primary border border-ink/10 overflow-hidden">
+              <div className="absolute left-0 right-0 top-1/2 h-px bg-accent-red/40" />
+              {camerasWithStream.length === 0 ? (
+                <div className="absolute inset-0 flex items-center justify-center text-xs text-text-dim font-mono">No cameras configured</div>
+              ) : (
+                camerasWithStream.map((cam, i) => {
+                  const col = camerasWithStream.length > 1 ? i / (Math.min(camerasWithStream.length, 8) - 1 || 1) : 0.5;
+                  const left = 10 + (col % 1.001) * 80;
+                  const top = Math.floor(i / 4) % 2 === 0 ? 32 : 68;
+                  const dotColor =
+                    cam.maxTier === 'red'
+                      ? 'bg-accent-red'
+                      : cam.maxTier === 'yellow'
+                      ? 'bg-accent-yellow'
+                      : cam.health === 'online'
+                      ? 'bg-accent-green'
+                      : 'bg-text-muted';
+                  return (
+                    <button
+                      key={cam.id}
+                      type="button"
+                      onClick={() => navigate(`/live?camera=${cam.id}`)}
+                      title={`${cam.name} — ${cam.location}`}
+                      className="absolute flex flex-col items-center gap-1 -translate-x-1/2 -translate-y-1/2 group"
+                      style={{ left: `${left}%`, top: `${top}%` }}
+                    >
+                      <span className={`w-3 h-3 rounded-full ring-2 ring-black/60 ${dotColor} ${cam.maxTier === 'red' ? 'animate-pulse' : ''}`} />
+                      <span className="text-[9px] font-mono text-text-dim group-hover:text-text-primary transition-colors">{cam.id.toUpperCase()}</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            <p className="text-[10px] text-text-dim font-mono mt-2">Illustrative sector layout, not to scale — click a dot to inspect that camera.</p>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[10px] font-mono text-text-dim">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent-red" />Critical</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent-yellow" />Under Watch</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent-green" />Normal</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-text-muted" />Offline</span>
+            </div>
+          </Card>
+        </div>
+
+        <div className="lg:col-span-3 space-y-3">
+          <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+            <Server className="w-4 h-4 text-accent-teal" />
+            System Status
+          </h2>
+          <Card bodyClassName="p-4 space-y-3">
+            <StatusRow icon={Cpu} label="AI Engine" ok={pipelineRunning} okLabel="Online" badLabel="Stopped" unknown={reachable === null} />
+            <StatusRow icon={GitBranch} label="Tracking System" ok={pipelineRunning} okLabel="Online" badLabel="Stopped" unknown={reachable === null} />
+            <StatusRow icon={Database} label="Database" ok={health?.database.ok ?? false} okLabel="Online" badLabel="Error" unknown={reachable === null} />
+            <StatusRow icon={Radio} label="Alert Feed" ok={backendStatus === 'connected'} okLabel="Connected" badLabel="Reconnecting" />
+            <StatusRow icon={Wifi} label="Network" ok={reachable === true} okLabel="Online" badLabel="Offline" unknown={reachable === null} />
+            <div className="pt-1">
+              <div className="flex items-center justify-between text-xs font-mono text-text-dim mb-1">
+                <span className="flex items-center gap-1.5">
+                  <HardDrive className="w-3.5 h-3.5" />
+                  Storage
+                </span>
+                <span className="text-text-primary font-semibold">{health?.disk.percentUsed != null ? `${health.disk.percentUsed.toFixed(0)}%` : '—'}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-ink/5 overflow-hidden">
+                <div className={`h-full rounded-full ${diskTone}`} style={{ width: `${Math.min(100, diskPct)}%` }} />
+              </div>
+            </div>
+          </Card>
+          <div
+            className={`p-3 rounded-xl border text-xs font-mono flex items-center gap-2 ${
+              allSystemsOk ? 'border-accent-green/30 bg-accent-green/10 text-accent-green' : 'border-accent-yellow/30 bg-accent-yellow/10 text-accent-yellow'
+            }`}
+          >
+            {allSystemsOk ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+            <span>
+              {allSystemsOk
+                ? 'All critical systems operational'
+                : reachable === false
+                ? 'Backend unreachable — showing last known data'
+                : 'Some systems need attention — see status above'}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

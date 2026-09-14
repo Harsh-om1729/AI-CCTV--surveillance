@@ -3,6 +3,7 @@ import { Incident } from '@/lib/mockIncidents';
 import { incidentsApi } from '@/lib/api';
 import { useBackendData } from '@/lib/useBackendData';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { useTheme } from '@/components/theme/ThemeProvider';
 import {
   getCategoryDistribution,
   getCameraDistribution,
@@ -72,12 +73,24 @@ export const AnalyticsPage: React.FC = () => {
   const tierData = getTierDistribution(incidents);
   const hourlyActivity = getPeakHourlyActivity(incidents);
 
+  // Recharts renders its own SVG strokes/fills, which Tailwind/CSS variables
+  // can't reach — pick literal colors here so gridlines and axes stay
+  // visible in both themes instead of "white" lines vanishing on a light
+  // background.
+  const { theme } = useTheme();
+  const chart = {
+    grid: theme === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 32, 0.08)',
+    axis: theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(15, 23, 32, 0.18)',
+    tick: theme === 'dark' ? '#8b949e' : '#5b6472',
+    pieStroke: theme === 'dark' ? '#08080d' : '#ffffff',
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-ink/10 pb-4">
         <div>
-          <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+          <h2 className="text-xl font-bold tracking-tight text-text-primary flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-accent-teal" />
             <span>Threat Intelligence Analytics</span>
             <DataSourceBadge isMock={isMock} error={error} />
@@ -87,7 +100,7 @@ export const AnalyticsPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 font-mono text-[11px] text-text-dim bg-black/60 px-3.5 py-2 rounded-xl border border-white/10 shadow-inner">
+        <div className="flex items-center gap-2 font-mono text-[11px] text-text-dim bg-bg-elevated px-3.5 py-2 rounded-xl border border-ink/10 shadow-inner">
           <Clock className="w-3.5 h-3.5 text-accent-teal" />
           <span>Data range: Last 24 hours</span>
         </div>
@@ -121,7 +134,7 @@ export const AnalyticsPage: React.FC = () => {
                   outerRadius={85}
                   paddingAngle={4}
                   dataKey="value"
-                  stroke="#08080d"
+                  stroke={chart.pieStroke}
                   strokeWidth={3}
                 >
                   {categoryData.map((entry, index) => (
@@ -160,17 +173,17 @@ export const AnalyticsPage: React.FC = () => {
                 data={cameraData}
                 margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} vertical={false} />
                 <XAxis
                   dataKey="camera"
-                  stroke="rgba(255, 255, 255, 0.15)"
-                  tick={{ fill: '#8b949e', fontSize: 11, fontFamily: 'monospace' }}
-                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.15)' }}
+                  stroke={chart.axis}
+                  tick={{ fill: chart.tick, fontSize: 11, fontFamily: 'monospace' }}
+                  axisLine={{ stroke: chart.axis }}
                 />
                 <YAxis
-                  stroke="rgba(255, 255, 255, 0.15)"
-                  tick={{ fill: '#8b949e', fontSize: 11, fontFamily: 'monospace' }}
-                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.15)' }}
+                  stroke={chart.axis}
+                  tick={{ fill: chart.tick, fontSize: 11, fontFamily: 'monospace' }}
+                  axisLine={{ stroke: chart.axis }}
                   allowDecimals={false}
                 />
                 <Tooltip content={<CustomAnalyticsTooltip />} />
@@ -208,17 +221,17 @@ export const AnalyticsPage: React.FC = () => {
                 data={tierData}
                 margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} vertical={false} />
                 <XAxis
                   dataKey="tier"
-                  stroke="rgba(255, 255, 255, 0.15)"
-                  tick={{ fill: '#8b949e', fontSize: 10, fontFamily: 'Inter' }}
-                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.15)' }}
+                  stroke={chart.axis}
+                  tick={{ fill: chart.tick, fontSize: 10, fontFamily: 'Inter' }}
+                  axisLine={{ stroke: chart.axis }}
                 />
                 <YAxis
-                  stroke="rgba(255, 255, 255, 0.15)"
-                  tick={{ fill: '#8b949e', fontSize: 11, fontFamily: 'monospace' }}
-                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.15)' }}
+                  stroke={chart.axis}
+                  tick={{ fill: chart.tick, fontSize: 11, fontFamily: 'monospace' }}
+                  axisLine={{ stroke: chart.axis }}
                   allowDecimals={false}
                 />
                 <Tooltip content={<CustomAnalyticsTooltip />} />
@@ -253,18 +266,18 @@ export const AnalyticsPage: React.FC = () => {
                 data={hourlyActivity}
                 margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} vertical={false} />
                 <XAxis
                   dataKey="hour"
-                  stroke="rgba(255, 255, 255, 0.15)"
-                  tick={{ fill: '#8b949e', fontSize: 9, fontFamily: 'monospace' }}
-                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.15)' }}
+                  stroke={chart.axis}
+                  tick={{ fill: chart.tick, fontSize: 9, fontFamily: 'monospace' }}
+                  axisLine={{ stroke: chart.axis }}
                   interval={2}
                 />
                 <YAxis
-                  stroke="rgba(255, 255, 255, 0.15)"
-                  tick={{ fill: '#8b949e', fontSize: 11, fontFamily: 'monospace' }}
-                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.15)' }}
+                  stroke={chart.axis}
+                  tick={{ fill: chart.tick, fontSize: 11, fontFamily: 'monospace' }}
+                  axisLine={{ stroke: chart.axis }}
                   allowDecimals={false}
                 />
                 <Tooltip content={<CustomAnalyticsTooltip />} />

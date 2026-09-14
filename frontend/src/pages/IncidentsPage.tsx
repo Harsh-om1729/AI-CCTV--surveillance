@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Incident } from '@/lib/mockIncidents';
 import { apiAssetUrl, incidentsApi } from '@/lib/api';
+import { threatStatusLabel } from '@/lib/threatStatus';
 import { useSystemHealth } from '@/components/system/SystemHealthProvider';
 import { EvidenceImage } from '@/components/ui/EvidenceImage';
 import { useBackendData } from '@/lib/useBackendData';
@@ -257,7 +258,7 @@ export const IncidentsPage: React.FC = () => {
           className={`card-3d p-4 rounded-2xl border transition-all cursor-pointer select-none ${
             selectedCategory === 'person'
               ? 'border-accent-teal ring-1 ring-accent-teal/50 bg-accent-teal/10'
-              : 'border-white/10 hover:border-white/20'
+              : 'border-ink/10 hover:border-ink/20'
           }`}
         >
           <div className="flex items-start justify-between">
@@ -265,7 +266,7 @@ export const IncidentsPage: React.FC = () => {
               <span className="text-xs font-bold text-accent-teal uppercase tracking-wider block">
                 Person Detect
               </span>
-              <span className="text-3xl font-extrabold text-white block">
+              <span className="text-3xl font-extrabold text-text-primary block">
                 {personCount}
               </span>
               <span className="text-[11px] text-text-dim">
@@ -284,7 +285,7 @@ export const IncidentsPage: React.FC = () => {
           className={`card-3d p-4 rounded-2xl border transition-all cursor-pointer select-none ${
             selectedCategory === 'vehicle'
               ? 'border-accent-yellow ring-1 ring-accent-yellow/50 bg-accent-yellow/10'
-              : 'border-white/10 hover:border-white/20'
+              : 'border-ink/10 hover:border-ink/20'
           }`}
         >
           <div className="flex items-start justify-between">
@@ -292,7 +293,7 @@ export const IncidentsPage: React.FC = () => {
               <span className="text-xs font-bold text-accent-yellow uppercase tracking-wider block">
                 Vehicle Detect
               </span>
-              <span className="text-3xl font-extrabold text-white block">
+              <span className="text-3xl font-extrabold text-text-primary block">
                 {vehicleCount}
               </span>
               <span className="text-[11px] text-text-dim">
@@ -311,7 +312,7 @@ export const IncidentsPage: React.FC = () => {
           className={`card-3d p-4 rounded-2xl border transition-all cursor-pointer select-none ${
             selectedCategory === 'unknown'
               ? 'border-accent-green ring-1 ring-accent-green/50 bg-accent-green/10'
-              : 'border-white/10 hover:border-white/20'
+              : 'border-ink/10 hover:border-ink/20'
           }`}
         >
           <div className="flex items-start justify-between">
@@ -319,7 +320,7 @@ export const IncidentsPage: React.FC = () => {
               <span className="text-xs font-bold text-accent-green uppercase tracking-wider block">
                 Unknown Detect
               </span>
-              <span className="text-3xl font-extrabold text-white block">
+              <span className="text-3xl font-extrabold text-text-primary block">
                 {unknownCount}
               </span>
               <span className="text-[11px] text-text-dim">
@@ -334,7 +335,7 @@ export const IncidentsPage: React.FC = () => {
       </div>
 
       {/* 2. Target Category Filter Bar & Search */}
-      <div className="card-3d p-4 bg-gradient-to-b from-[#0c0c14] to-[#06060a] border border-white/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)] space-y-4">
+      <div className="card-3d p-4 bg-gradient-to-b from-bg-surface to-bg-primary border border-ink/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)] space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           {/* Category Filter Pills */}
           <div className="flex flex-wrap items-center gap-2">
@@ -347,7 +348,7 @@ export const IncidentsPage: React.FC = () => {
               className={`px-3 py-1.5 text-xs font-mono rounded-xl transition-all border ${
                 selectedCategory === 'all'
                   ? 'bg-accent-teal/20 text-accent-teal border-accent-teal/50 font-bold shadow-[0_0_12px_rgba(0,240,255,0.25)]'
-                  : 'bg-black/60 text-text-dim border-white/10 hover:text-white'
+                  : 'bg-bg-elevated text-text-dim border-ink/10 hover:text-text-primary'
               }`}
             >
               ALL DETECTIONS ({incidentsData.length})
@@ -358,7 +359,7 @@ export const IncidentsPage: React.FC = () => {
               className={`px-3 py-1.5 text-xs font-mono rounded-xl transition-all border flex items-center gap-1.5 ${
                 selectedCategory === 'person'
                   ? 'bg-accent-teal/20 text-accent-teal border-accent-teal/50 font-bold shadow-[0_0_12px_rgba(0,240,255,0.25)]'
-                  : 'bg-black/60 text-text-dim border-white/10 hover:text-accent-teal'
+                  : 'bg-bg-elevated text-text-dim border-ink/10 hover:text-accent-teal'
               }`}
             >
               <User className="w-3.5 h-3.5" />
@@ -370,7 +371,7 @@ export const IncidentsPage: React.FC = () => {
               className={`px-3 py-1.5 text-xs font-mono rounded-xl transition-all border flex items-center gap-1.5 ${
                 selectedCategory === 'vehicle'
                   ? 'bg-accent-yellow/20 text-accent-yellow border-accent-yellow/50 font-bold shadow-[0_0_12px_rgba(255,170,0,0.25)]'
-                  : 'bg-black/60 text-text-dim border-white/10 hover:text-accent-yellow'
+                  : 'bg-bg-elevated text-text-dim border-ink/10 hover:text-accent-yellow'
               }`}
             >
               <Car className="w-3.5 h-3.5" />
@@ -382,7 +383,7 @@ export const IncidentsPage: React.FC = () => {
               className={`px-3 py-1.5 text-xs font-mono rounded-xl transition-all border flex items-center gap-1.5 ${
                 selectedCategory === 'unknown'
                   ? 'bg-accent-green/20 text-accent-green border-accent-green/50 font-bold shadow-[0_0_12px_rgba(0,255,136,0.25)]'
-                  : 'bg-black/60 text-text-dim border-white/10 hover:text-accent-green'
+                  : 'bg-bg-elevated text-text-dim border-ink/10 hover:text-accent-green'
               }`}
             >
               <HelpCircle className="w-3.5 h-3.5" />
@@ -403,7 +404,7 @@ export const IncidentsPage: React.FC = () => {
         </div>
 
         {/* Camera Filter & Search Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-white/10">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-ink/10">
           <div className="sm:col-span-2 relative">
             <Search className="w-4 h-4 text-text-muted absolute left-3 top-2.5" />
             <input
@@ -412,7 +413,7 @@ export const IncidentsPage: React.FC = () => {
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by incident #, track ID, camera ID or location..."
               aria-label="Search incidents"
-              className="w-full pl-9 pr-3 py-2 bg-[#0a0a10] border border-white/10 rounded-xl text-xs text-white placeholder:text-text-muted focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
+              className="w-full pl-9 pr-3 py-2 bg-bg-surface border border-ink/10 rounded-xl text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
             />
           </div>
 
@@ -421,7 +422,7 @@ export const IncidentsPage: React.FC = () => {
               aria-label="Filter by camera"
               value={selectedCamera}
               onChange={(e) => setSelectedCamera(e.target.value)}
-              className="w-full px-3 py-2 bg-[#0a0a10] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
+              className="w-full px-3 py-2 bg-bg-surface border border-ink/10 rounded-xl text-xs text-text-primary focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
             >
               <option value="all">All Cameras ({availableCameras.length})</option>
               {availableCameras.map((cam) => (
@@ -438,7 +439,7 @@ export const IncidentsPage: React.FC = () => {
               aria-label="Filter by status"
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value as StatusFilter)}
-              className="w-full px-3 py-2 bg-[#0a0a10] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
+              className="w-full px-3 py-2 bg-bg-surface border border-ink/10 rounded-xl text-xs text-text-primary focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
             >
               <option value="all">All statuses</option>
               <option value="open">Open — needs action</option>
@@ -451,13 +452,13 @@ export const IncidentsPage: React.FC = () => {
 
       {/* 3. Incident table, with loading / offline / empty states */}
       {loading && incidentsData.length === 0 ? (
-        <div role="status" className="card-3d p-10 border border-white/10 rounded-2xl text-center text-xs font-mono text-text-dim">
+        <div role="status" className="card-3d p-10 border border-ink/10 rounded-2xl text-center text-xs font-mono text-text-dim">
           Loading incidents…
         </div>
       ) : isMock && incidentsData.length === 0 ? (
         <div role="alert" className="card-3d p-10 border border-accent-red/40 bg-accent-red/5 rounded-2xl text-center space-y-3">
           <AlertTriangle className="w-6 h-6 text-accent-red mx-auto" />
-          <h3 className="text-sm font-semibold text-white">Backend unreachable</h3>
+          <h3 className="text-sm font-semibold text-text-primary">Backend unreachable</h3>
           <p className="text-xs text-text-dim max-w-md mx-auto">
             {error ?? 'The API did not answer.'} Nothing is shown rather than sample data.
           </p>
@@ -466,9 +467,9 @@ export const IncidentsPage: React.FC = () => {
           </Button>
         </div>
       ) : incidentsData.length === 0 ? (
-        <div className="card-3d p-10 border border-dashed border-white/15 rounded-2xl text-center space-y-2">
+        <div className="card-3d p-10 border border-dashed border-ink/15 rounded-2xl text-center space-y-2">
           <CheckCircle2 className="w-6 h-6 text-accent-green mx-auto" />
-          <h3 className="text-sm font-semibold text-white">No incidents recorded</h3>
+          <h3 className="text-sm font-semibold text-text-primary">No incidents recorded</h3>
           <p className="text-xs text-text-dim">
             Alerts raised by the AI pipeline appear here, with their evidence, as they happen.
           </p>
@@ -483,7 +484,7 @@ export const IncidentsPage: React.FC = () => {
                   onClick={() =>
                     setSortDirection((prev) => (prev === 'desc' ? 'asc' : 'desc'))
                   }
-                  className="flex items-center gap-1.5 text-text-dim hover:text-white transition-colors select-none font-mono"
+                  className="flex items-center gap-1.5 text-text-dim hover:text-text-primary transition-colors select-none font-mono"
                   title="Toggle sort direction by timestamp"
                 >
                   <span>TIMESTAMP</span>
@@ -546,7 +547,7 @@ export const IncidentsPage: React.FC = () => {
                   {/* Camera Location */}
                   <TableCell>
                     <div className="space-y-0.5">
-                      <div className="font-mono text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                      <div className="font-mono text-xs font-bold text-text-primary uppercase flex items-center gap-1.5">
                         <Video className="w-3 h-3 text-accent-teal" />
                         <span>{incident.cameraName}</span>
                       </div>
@@ -570,7 +571,7 @@ export const IncidentsPage: React.FC = () => {
                       pulse={isRed}
                       size="sm"
                     >
-                      {incident.tier.toUpperCase()} ({incident.score.toFixed(0)})
+                      {threatStatusLabel(incident.tier)} ({incident.score.toFixed(0)})
                     </Badge>
                   </TableCell>
 
@@ -587,7 +588,7 @@ export const IncidentsPage: React.FC = () => {
                       onClick={() => openIncident(incident)}
                       title="Inspect snapshot frame"
                       aria-label={`Open evidence for incident ${incident.id}`}
-                      className="w-14 h-9 rounded-lg border border-white/15 bg-black overflow-hidden hover:border-accent-teal transition-all group relative block"
+                      className="w-14 h-9 rounded-lg border border-ink/15 bg-black overflow-hidden hover:border-accent-teal transition-all group relative block"
                     >
                       <EvidenceImage
                         src={apiAssetUrl(incident.snapshotUrl)}
@@ -605,7 +606,7 @@ export const IncidentsPage: React.FC = () => {
                   <TableCell className="text-right">
                     <button
                       onClick={() => openIncident(incident)}
-                      className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-accent-teal/20 text-text-dim hover:text-accent-teal border border-white/10 hover:border-accent-teal/40 transition-all font-mono text-[10px] font-semibold inline-flex items-center gap-1 shadow-sm"
+                      className="px-2.5 py-1 rounded-lg bg-ink/[0.06] hover:bg-accent-teal/20 text-text-dim hover:text-accent-teal border border-ink/10 hover:border-accent-teal/40 transition-all font-mono text-[10px] font-semibold inline-flex items-center gap-1 shadow-sm"
                       title="Open evidence, score breakdown and actions"
                     >
                       <Eye className="w-3 h-3" />
@@ -628,11 +629,11 @@ export const IncidentsPage: React.FC = () => {
         </>
       ) : (
         /* Empty State */
-        <div className="card-3d p-12 bg-black/60 border border-dashed border-white/15 rounded-2xl text-center space-y-3">
-          <div className="p-3 bg-black border border-white/10 rounded-full w-12 h-12 flex items-center justify-center mx-auto text-text-muted">
+        <div className="card-3d p-12 bg-bg-elevated border border-dashed border-ink/15 rounded-2xl text-center space-y-3">
+          <div className="p-3 bg-bg-elevated border border-ink/10 rounded-full w-12 h-12 flex items-center justify-center mx-auto text-text-muted">
             <FilterX className="w-6 h-6" />
           </div>
-          <h3 className="text-sm font-semibold text-white">No Detections Found</h3>
+          <h3 className="text-sm font-semibold text-text-primary">No Detections Found</h3>
           <p className="text-xs text-text-dim max-w-sm mx-auto">
             No targets match the active category and camera filters.
           </p>
@@ -687,7 +688,7 @@ export const IncidentsPage: React.FC = () => {
                       value={resolveReason}
                       onChange={(e) => setResolveReason(e.target.value)}
                       disabled={actionBusy || reasons.length === 0}
-                      className="px-2 py-1.5 bg-[#0a0a10] border border-white/15 rounded-lg text-xs text-white font-mono focus:outline-none focus:border-accent-teal"
+                      className="px-2 py-1.5 bg-bg-surface border border-ink/15 rounded-lg text-xs text-text-primary font-mono focus:outline-none focus:border-accent-teal"
                     >
                       <option value="">{reasons.length ? 'Resolve as…' : 'Reasons unavailable'}</option>
                       {reasons.map((r) => (
@@ -728,7 +729,7 @@ export const IncidentsPage: React.FC = () => {
           }
         >
           <div className="space-y-4">
-            <div className="relative aspect-video w-full rounded-xl overflow-hidden border border-white/15 bg-black shadow-2xl">
+            <div className="relative aspect-video w-full rounded-xl overflow-hidden border border-ink/15 bg-black shadow-2xl">
               <EvidenceImage
                 src={apiAssetUrl(activeEvidence ?? selectedIncident.snapshotUrl)}
                 alt={`Evidence frame for incident ${selectedIncident.id}`}
@@ -754,7 +755,7 @@ export const IncidentsPage: React.FC = () => {
                       aria-label={`Show ${frame.label}`}
                       aria-pressed={active}
                       className={`shrink-0 w-24 rounded-lg overflow-hidden border text-left ${
-                        active ? 'border-accent-teal' : 'border-white/15 hover:border-white/40'
+                        active ? 'border-accent-teal' : 'border-ink/15 hover:border-ink/40'
                       }`}
                     >
                       <div className="aspect-video bg-black">
@@ -772,10 +773,10 @@ export const IncidentsPage: React.FC = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 bg-black/60 rounded-xl border border-white/10 font-mono text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 bg-bg-elevated rounded-xl border border-ink/10 font-mono text-xs">
               <div>
                 <span className="text-[10px] text-text-dim block uppercase">Target</span>
-                <span className="text-white font-bold uppercase">{selectedIncident.category}</span>
+                <span className="text-text-primary font-bold uppercase">{selectedIncident.category}</span>
                 <span className="text-[10px] text-text-muted block">
                   {selectedIncident.personId != null ? `Person #${selectedIncident.personId}` : `Track ${selectedIncident.trackId}`}
                 </span>
@@ -788,8 +789,8 @@ export const IncidentsPage: React.FC = () => {
               </div>
               <div>
                 <span className="text-[10px] text-text-dim block uppercase">Threat score</span>
-                <span className="text-white font-bold">
-                  {selectedIncident.score.toFixed(1)} / 100 · {selectedIncident.tier.toUpperCase()}
+                <span className="text-text-primary font-bold">
+                  {selectedIncident.score.toFixed(1)} / 100 · {threatStatusLabel(selectedIncident.tier)}
                 </span>
               </div>
               <div>
@@ -806,7 +807,7 @@ export const IncidentsPage: React.FC = () => {
             </div>
 
             {/* Why it scored what it did */}
-            <div className="p-3 rounded-xl border border-white/10 bg-black/40 font-mono text-xs">
+            <div className="p-3 rounded-xl border border-ink/10 bg-bg-elevated font-mono text-xs">
               <span className="text-[10px] text-text-dim uppercase block mb-2">Score breakdown</span>
               {selectedIncident.breakdown.recorded === false ? (
                 <p className="text-text-muted">
@@ -826,9 +827,9 @@ export const IncidentsPage: React.FC = () => {
                   ]
                     .filter(([, v]) => v != null)
                     .map(([label, value, max]) => (
-                      <div key={label as string} className="p-2 rounded bg-white/[0.03] border border-white/5">
+                      <div key={label as string} className="p-2 rounded bg-ink/[0.03] border border-ink/5">
                         <span className="text-[10px] text-text-dim block">{label as string}</span>
-                        <span className="text-white font-semibold">
+                        <span className="text-text-primary font-semibold">
                           {Number(value).toFixed(1)}
                           {max ? <span className="text-text-muted"> / {max as number}</span> : null}
                         </span>

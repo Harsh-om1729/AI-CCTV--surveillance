@@ -170,13 +170,13 @@ export const CameraTile: React.FC<CameraTileProps> = ({
 
         {/* TOP-LEFT: camera name, health, source */}
         <div className="absolute top-3 left-3 z-20 flex flex-wrap items-center gap-2 max-w-[75%]">
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-black/85 border border-white/10 shadow-sm">
-            <span className={cn('inline-flex rounded-full h-1.5 w-1.5', healthDot)} aria-hidden />
-            <span className="font-mono text-xs font-bold text-white tracking-wider uppercase">
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-black/85 border border-white/10 shadow-sm max-w-full min-w-0">
+            <span className={cn('inline-flex rounded-full h-1.5 w-1.5 shrink-0', healthDot)} aria-hidden />
+            <span className="font-mono text-xs font-bold text-white tracking-wider uppercase truncate min-w-0">
               {cameraName}
             </span>
             {label && (
-              <span className="hidden sm:inline font-mono text-[10px] text-text-dim border-l border-white/15 pl-1.5 truncate max-w-[12rem]">
+              <span className="hidden sm:inline font-mono text-[10px] text-text-dim border-l border-white/15 pl-1.5 truncate max-w-[12rem] shrink-0">
                 {label}
               </span>
             )}

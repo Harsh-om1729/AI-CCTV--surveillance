@@ -219,7 +219,7 @@ export const WatchlistPage: React.FC = () => {
       )}
 
       {/* 1. DPDP Act Statutory Compliance Warning Banner */}
-      <div className="card-3d p-4 bg-gradient-to-r from-accent-yellow/10 via-black/80 to-[#08080c] border-l-4 border-l-accent-yellow border border-white/10 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.7)] space-y-1">
+      <div className="card-3d p-4 bg-gradient-to-r from-accent-yellow/10 via-bg-surface to-bg-primary border-l-4 border-l-accent-yellow border border-ink/10 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.7)] space-y-1">
         <div className="flex items-center gap-2 text-accent-yellow font-bold text-xs font-mono uppercase tracking-wide">
           <AlertTriangle className="w-4 h-4 shrink-0 text-accent-yellow" />
           <span>Statutory Compliance Notice: Biometric Face-Recognition Data</span>
@@ -230,7 +230,7 @@ export const WatchlistPage: React.FC = () => {
       </div>
 
       {/* 2. Top Filter & Action Bar */}
-      <div className="card-3d flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-b from-[#0c0c14] to-[#06060a] border border-white/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)]">
+      <div className="card-3d flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-b from-bg-surface to-bg-primary border border-ink/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)]">
         {/* Search Input */}
         <div className="relative flex-1 max-w-md">
           <Search className="w-4 h-4 text-text-muted absolute left-3 top-2.5" />
@@ -239,12 +239,12 @@ export const WatchlistPage: React.FC = () => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search watchlist subjects by name..."
-            className="w-full pl-9 pr-8 py-2 bg-[#0a0a10] border border-white/10 rounded-xl text-xs text-white placeholder:text-text-muted focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
+            className="w-full pl-9 pr-8 py-2 bg-bg-surface border border-ink/10 rounded-xl text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-teal focus:ring-1 focus:ring-accent-teal font-mono transition-all"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-2.5 text-text-muted hover:text-white"
+              className="absolute right-2.5 top-2.5 text-text-muted hover:text-text-primary"
             >
               <X className="w-3.5 h-3.5" />
             </button>

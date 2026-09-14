@@ -216,6 +216,17 @@ ALERT_CONFIRM_WINDOW = int(os.getenv("ALERT_CONFIRM_WINDOW", "3"))
 # stopping at this ceiling, so a sustained presence is reported and then quiet.
 ALERT_MAX_COOLDOWN_SECONDS = float(os.getenv("ALERT_MAX_COOLDOWN_SECONDS", "64"))
 
+# The ALERT_CONFIRM_* / cooldown settings above only govern when an incident
+# is *recorded*. The per-camera status shown live on the dashboard (the
+# camera tile badge, the Normal/Under Watch/Critical counts, "Selected
+# Camera") is a separate number — the raw max tier across this frame's
+# detections, recomputed every frame with none of that smoothing. A track
+# hovering at a tier boundary flickers that status yellow/red for a single
+# frame at a time even when no incident is ever recorded for it. This holds
+# the *displayed* tier at its highest recent value for this many seconds
+# before letting it decay, so an operator has time to actually see it.
+MAX_TIER_HOLD_SECONDS = float(os.getenv("MAX_TIER_HOLD_SECONDS", "6"))
+
 # Cosine similarity (0-1) above which a face is treated as a watchlist match.
 # 0.5 was matching almost any face against a stored embedding (observed hits
 # as low as 0.51-0.55 against an unrelated person) - raised to cut false

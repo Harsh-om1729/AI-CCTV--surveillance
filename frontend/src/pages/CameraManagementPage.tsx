@@ -213,7 +213,7 @@ export const CameraManagementPage: React.FC = () => {
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <h2 className="text-lg font-bold text-text-primary flex items-center gap-2">
             <Video className="w-5 h-5 text-accent-teal" />
             Camera Management
           </h2>
@@ -240,7 +240,7 @@ export const CameraManagementPage: React.FC = () => {
       {cameras.length === 0 ? (
         <Card className="p-10 text-center">
           <Video className="w-6 h-6 text-text-muted mx-auto mb-2" />
-          <h3 className="text-sm font-semibold text-white">No cameras configured</h3>
+          <h3 className="text-sm font-semibold text-text-primary">No cameras configured</h3>
           <p className="text-xs text-text-dim mt-1">
             Set CAMERA_SOURCES in .env, or add one here (webcam, RTSP, or simulated for a demo).
           </p>
@@ -259,14 +259,14 @@ export const CameraManagementPage: React.FC = () => {
                       className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
                         cam.health === 'online'
                           ? 'bg-accent-green/10 border-accent-green/30 text-accent-green'
-                          : 'bg-white/5 border-white/10 text-text-muted'
+                          : 'bg-ink/5 border-ink/10 text-text-muted'
                       }`}
                     >
                       <Video className="w-5 h-5" />
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-white">{cam.name || cam.id.toUpperCase()}</span>
+                        <span className="font-bold text-text-primary">{cam.name || cam.id.toUpperCase()}</span>
                         <Badge variant={cam.health === 'online' ? 'green' : 'neutral'} dot size="sm">
                           {cam.health || 'unknown'}
                         </Badge>

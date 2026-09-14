@@ -8,7 +8,7 @@ export const AppLayout: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-[#05070a] text-text-primary flex relative">
+    <div className="min-h-screen bg-bg-primary text-text-primary flex relative">
       {/* Global Real-time Alert Toasts */}
       <AlertToastContainer />
 

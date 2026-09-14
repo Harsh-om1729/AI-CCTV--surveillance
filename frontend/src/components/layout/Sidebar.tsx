@@ -62,8 +62,8 @@ function renderNavItem(item: NavItem, camBadge: string | undefined, onClose: () 
         cn(
           'group relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors select-none',
           isActive
-            ? 'bg-[#0f1422] text-white font-semibold border-l-2 border-accent-teal'
-            : 'text-text-dim hover:text-white hover:bg-white/[0.04]'
+            ? 'bg-bg-elevated text-text-primary font-semibold border-l-2 border-accent-teal'
+            : 'text-text-dim hover:text-text-primary hover:bg-ink/[0.04]'
         )
       }
     >
@@ -72,13 +72,13 @@ function renderNavItem(item: NavItem, camBadge: string | undefined, onClose: () 
           <Icon
             className={cn(
               'w-4 h-4 shrink-0 transition-colors',
-              isActive ? 'text-accent-teal' : 'text-text-muted group-hover:text-white'
+              isActive ? 'text-accent-teal' : 'text-text-muted group-hover:text-text-primary'
             )}
           />
           <span className="flex-1 truncate">{item.label}</span>
 
           {(item.to === '/live' ? camBadge : item.badge) && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#141a29] text-text-dim border border-white/10">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-bg-elevated text-text-dim border border-ink/10">
               {item.to === '/live' ? camBadge : item.badge}
             </span>
           )}
@@ -109,7 +109,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       {/* Mobile Backdrop */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40 bg-bg-primary/80 backdrop-blur-sm lg:hidden transition-opacity"
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden transition-opacity"
           onClick={onClose}
         />
       )}
@@ -117,18 +117,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       {/* Sidebar Container */}
       <aside
         className={cn(
-          'fixed top-0 bottom-0 left-0 z-40 w-64 bg-[#05070a] border-r border-[#161924] flex flex-col transition-transform duration-200 ease-in-out lg:translate-x-0',
+          'fixed top-0 bottom-0 left-0 z-40 w-64 bg-bg-primary border-r border-border-subtle flex flex-col transition-transform duration-200 ease-in-out lg:translate-x-0',
           isOpen ? 'translate-x-0' : '-translate-x-full'
         )}
       >
         {/* Brand / Header */}
-        <div className="h-16 px-5 flex items-center justify-between border-b border-[#161924] bg-[#07090f]">
+        <div className="h-16 px-5 flex items-center justify-between border-b border-border-subtle bg-bg-primary">
           <NavLink to="/" className="flex items-center gap-3 group" onClick={onClose}>
-            <div className="w-9 h-9 rounded-xl bg-[#0e121c] border border-white/10 flex items-center justify-center text-accent-teal">
+            <div className="w-9 h-9 rounded-xl bg-bg-elevated border border-ink/10 flex items-center justify-center text-accent-teal">
               <Shield className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2 font-bold tracking-tight text-base text-white">
+              <div className="flex items-center gap-2 font-bold tracking-tight text-base text-text-primary">
                 <span>IBVAP</span>
                 <span className="text-[10px] font-bold px-2 py-0.5 bg-accent-teal/15 text-accent-teal rounded-full border border-accent-teal/30">
                   AI
@@ -144,7 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           <button
             onClick={onClose}
             aria-label="Close sidebar navigation"
-            className="lg:hidden p-1.5 rounded-lg text-text-muted hover:text-white hover:bg-white/[0.04] transition-colors"
+            className="lg:hidden p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-ink/[0.04] transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -164,11 +164,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
         </nav>
 
         {/* Simple System Status Footer */}
-        <div className="p-3.5 border-t border-[#161924] bg-[#07090f] flex items-center justify-between text-xs font-mono">
+        <div className="p-3.5 border-t border-border-subtle bg-bg-primary flex items-center justify-between text-xs font-mono">
           <NavLink
             to="/settings"
             onClick={onClose}
-            className="flex items-center gap-1.5 text-text-muted hover:text-white"
+            className="flex items-center gap-1.5 text-text-muted hover:text-text-primary"
             title="Open system health"
           >
             <span className={`w-1.5 h-1.5 rounded-full inline-block ${footer.dot}`} />

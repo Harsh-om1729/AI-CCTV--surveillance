@@ -66,7 +66,7 @@ export const DemoModePage: React.FC = () => {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+        <h2 className="text-lg font-bold text-text-primary flex items-center gap-2">
           <Play className="w-5 h-5 text-accent-teal" />
           Demo Mode
         </h2>
@@ -92,21 +92,21 @@ export const DemoModePage: React.FC = () => {
                         ? 'bg-accent-green/15 border-accent-green text-accent-green'
                         : st === 'active'
                         ? 'bg-accent-teal/15 border-accent-teal text-accent-teal animate-pulse'
-                        : 'bg-white/5 border-white/15 text-text-muted'
+                        : 'bg-ink/5 border-ink/15 text-text-muted'
                     }`}
                   >
                     {st === 'done' ? <CheckCircle2 className="w-5 h-5" /> : <Icon className="w-5 h-5" />}
                   </div>
                   <span
                     className={`text-[10px] font-semibold text-center leading-tight ${
-                      st === 'pending' ? 'text-text-muted' : 'text-white'
+                      st === 'pending' ? 'text-text-muted' : 'text-text-primary'
                     }`}
                   >
                     {stage.label}
                   </span>
                 </div>
                 {i < STAGES.length - 1 && (
-                  <div className={`h-0.5 flex-1 min-w-[16px] ${st === 'done' ? 'bg-accent-green/50' : 'bg-white/10'}`} />
+                  <div className={`h-0.5 flex-1 min-w-[16px] ${st === 'done' ? 'bg-accent-green/50' : 'bg-ink/10'}`} />
                 )}
               </React.Fragment>
             );
@@ -154,7 +154,7 @@ export const DemoModePage: React.FC = () => {
           </Button>
         </div>
 
-        <div className="w-full bg-[#121624] h-2 rounded-full overflow-hidden border border-white/5 mb-3">
+        <div className="w-full bg-bg-elevated h-2 rounded-full overflow-hidden border border-ink/5 mb-3">
           <div
             className="bg-gradient-to-r from-accent-green via-accent-yellow to-accent-red h-full transition-all duration-300"
             style={{ width: `${(status.step / status.totalSteps) * 100}%` }}
@@ -162,10 +162,10 @@ export const DemoModePage: React.FC = () => {
         </div>
 
         {latestLog && (
-          <div className="p-3 rounded-xl bg-black/40 border border-white/10 space-y-1">
+          <div className="p-3 rounded-xl bg-bg-elevated border border-ink/10 space-y-1">
             <div className="flex items-center gap-2 text-xs font-mono">
               <span className="text-accent-teal font-bold">STEP {latestLog.step}:</span>
-              <span className="text-white">{latestLog.message}</span>
+              <span className="text-text-primary">{latestLog.message}</span>
             </div>
             {status.latestScore != null && (
               <div className="flex items-center gap-2 text-xs font-mono">
@@ -182,7 +182,7 @@ export const DemoModePage: React.FC = () => {
         {status.logs.length > 0 && (
           <div className="mt-3 space-y-1 max-h-56 overflow-y-auto pr-1">
             {[...status.logs].reverse().map((log, i) => (
-              <div key={`${log.step}-${i}`} className="flex items-start gap-2 text-[11px] font-mono text-text-dim border-l-2 border-white/10 pl-2 py-0.5">
+              <div key={`${log.step}-${i}`} className="flex items-start gap-2 text-[11px] font-mono text-text-dim border-l-2 border-ink/10 pl-2 py-0.5">
                 <span className="text-text-muted shrink-0">{log.time}</span>
                 <span className="text-accent-teal shrink-0">#{log.step}</span>
                 <span>{log.message}</span>
@@ -192,7 +192,7 @@ export const DemoModePage: React.FC = () => {
         )}
 
         {status.currentIncidentId != null && (
-          <div className="mt-3 pt-3 border-t border-white/10 flex items-center justify-between">
+          <div className="mt-3 pt-3 border-t border-ink/10 flex items-center justify-between">
             <span className="text-xs text-text-dim">
               Incident #{status.currentIncidentId} was written to the real database with encrypted evidence.
             </span>

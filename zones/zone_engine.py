@@ -15,11 +15,12 @@ ZONE_PRIORITY = {"none": 0, "green": 1, "yellow": 2, "red": 3}
 class Zone:
     """A simple polygon region in camera pixel coordinates."""
 
-    def __init__(self, zone_type: str, polygon: list):
+    def __init__(self, zone_type: str, polygon: list, enabled: bool = True):
         if zone_type not in ("red", "yellow", "green"):
             raise ValueError(f"Unknown zone_type: {zone_type!r}, expected red/yellow/green")
         self.zone_type = zone_type  # "red" | "yellow" | "green"
         self.polygon = polygon  # list of (x, y) pixel points
+        self.enabled = enabled  # disabled zones are kept (saved) but ignored by classify()
 
     def contains(self, point: tuple) -> bool:
         """Evaluates whether point (x, y) lies inside or on the polygon contour."""
@@ -36,12 +37,26 @@ class Zone:
             return (0.0, 0.0)
         return (sum(xs) / len(xs), sum(ys) / len(ys))
 
+    def area(self) -> float:
+        """Polygon area in px^2, via cv2 (already used by contains()) — the
+        specificity tiebreak for overlapping same-tier zones: a smaller,
+        more specific zone wins over a larger one it happens to sit inside,
+        regardless of which was drawn/loaded first."""
+        if len(self.polygon) < 3:
+            return 0.0
+        contour = np.array(self.polygon, dtype=np.float32)
+        return abs(cv2.contourArea(contour))
+
     def to_dict(self) -> dict:
-        return {"zone_type": self.zone_type, "polygon": self.polygon}
+        return {"zone_type": self.zone_type, "polygon": self.polygon, "enabled": self.enabled}
 
     @classmethod
     def from_dict(cls, data: dict) -> "Zone":
-        return cls(data["zone_type"], [tuple(p) for p in data["polygon"]])
+        return cls(
+            data["zone_type"],
+            [tuple(p) for p in data["polygon"]],
+            enabled=data.get("enabled", True),
+        )
 
 
 class ZoneEngine:
@@ -49,11 +64,18 @@ class ZoneEngine:
     tier.
     
     Supports:
-    1. Real Geometric Polygons (drawn interactively or loaded from configuration).
-       A detection's ground position ((x1 + x2)/2, y2) is tested via point-in-polygon.
-       Priority: Red > Yellow > Green. If outside all polygons, returns 'none'.
-    2. Fixed Tier Fallback: For cameras viewing an entire sector of one tier
-       (e.g., fence-line mounted cameras).
+    1. Fixed Tier (CAMERA_ZONE_TIERS): for cameras viewing an entire sector of
+       one tier (e.g., fence-line mounted cameras). Authoritative when set -
+       takes precedence over any polygons loaded from configuration below.
+    2. Real Geometric Polygons (loaded from config/zones_<camera>.json), used
+       only when no fixed tier is set for this camera. A detection's ground
+       position ((x1 + x2)/2, y2) is tested via point-in-polygon. Priority:
+       Red > Yellow > Green, then — for overlapping zones of the same tier —
+       the smaller (more specific) polygon. If outside all polygons, returns
+       'none'. Zones only ever carry a raw tier here; an operator-facing
+       "role" (Restricted/Buffer/Transit/Authorized) is resolved to a tier
+       one layer up, in integration/api.py, via zones/zone_policy.py — this
+       class never sees a role name.
     3. Direction analysis: Direction vector compared against border geometry or
        configurable inward_vector.
     4. Curfew re-tiering: Green zones re-tier to Yellow overnight (wraps midnight).
@@ -114,18 +136,26 @@ class ZoneEngine:
 
     def classify(self, ground_point: tuple, direction: "tuple | None" = None) -> dict:
         """Returns {"tier": "red"|"yellow"|"green"|"none", "direction": "inward"|"outward"|"parallel"|None}"""
-        # If geometric polygons are defined, geometric evaluation takes precedence
-        if self.zones:
-            matches = [z for z in self.zones if z.contains(ground_point)]
+        # A fixed tier (CAMERA_ZONE_TIERS) is authoritative when set - "so its
+        # entire view is always that tier" per .env's own documentation. It
+        # must win over any polygons still sitting in config/zones_<cam>.json
+        # from before the camera was pinned; those are drawn-zone leftovers
+        # with no editor left to clear them (the drawing UI was removed), so
+        # letting them silently override the operator's explicit setting is
+        # exactly the confusing bug this order used to produce: a camera
+        # pinned "red" scoring detections as whatever old polygon they fall
+        # in, with nothing on screen explaining why.
+        if self.fixed_tier is not None:
+            tier = self.fixed_tier
+            direction_label = self._direction_label_fixed(direction)
+        elif self.zones:
+            matches = [z for z in self.zones if z.enabled and z.contains(ground_point)]
             if not matches:
                 # Outside all defined zones
                 return {"tier": "none", "direction": None}
-            best = max(matches, key=lambda z: ZONE_PRIORITY[z.zone_type])
+            best = self._select_most_specific(matches)
             tier = best.zone_type
             direction_label = self._direction_label(best, tier, direction)
-        elif self.fixed_tier is not None:
-            tier = self.fixed_tier
-            direction_label = self._direction_label_fixed(direction)
         else:
             return {"tier": "none", "direction": None}
 
@@ -133,6 +163,13 @@ class ZoneEngine:
             tier = "yellow"
 
         return {"tier": tier, "direction": direction_label}
+
+    @staticmethod
+    def _select_most_specific(matches: list) -> Zone:
+        """Explicit priority + specificity, not polygon load order: highest
+        tier wins first; among zones tied on tier, the smaller (more
+        specific) polygon wins, regardless of which was added first."""
+        return max(matches, key=lambda z: (ZONE_PRIORITY[z.zone_type], -z.area()))
 
     def _direction_label(self, zone: Zone, tier: str, direction: "tuple | None") -> "str | None":
         if direction is None:

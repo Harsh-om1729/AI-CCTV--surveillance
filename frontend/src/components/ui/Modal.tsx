@@ -44,7 +44,9 @@ export const Modal: React.FC<ModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg-primary/80 backdrop-blur-sm animate-in fade-in duration-150">
+    // The scrim behind a modal is conventionally dark in both themes — it's
+    // dimming the page, not part of the page's own chrome.
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
       {/* Click-outside backdrop */}
       <div className="fixed inset-0" onClick={onClose} />
 

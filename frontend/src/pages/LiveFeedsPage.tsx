@@ -143,17 +143,17 @@ export const LiveFeedsPage: React.FC = () => {
       )}
 
       {/* Top Toolbar / Filter Row */}
-      <div className="card-3d flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-4 rounded-2xl border border-white/10 bg-gradient-to-b from-[#0c0c14] to-[#06060a] shadow-[0_15px_35px_rgba(0,0,0,0.8)]">
+      <div className="card-3d flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-4 rounded-2xl border border-ink/10 bg-gradient-to-b from-bg-surface to-bg-primary shadow-[0_15px_35px_rgba(0,0,0,0.8)]">
         {/* Left: Camera Count Indicator & Status */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <Video className="w-4 h-4 text-accent-teal" />
-            <span className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+            <span className="font-mono text-xs font-bold text-text-primary uppercase tracking-wider">
               Surveillance Grid
             </span>
           </div>
 
-          <span className="text-white/20">|</span>
+          <span className="text-text-primary/20">|</span>
 
           <Badge
             variant={cameras.length > 0 && onlineCount === cameras.length ? 'green' : 'yellow'}
@@ -202,14 +202,14 @@ export const LiveFeedsPage: React.FC = () => {
 
           {/* Grid Columns Switcher (when in grid mode) */}
           {viewMode === 'grid' && cameras.length >= 4 && (
-            <div className="hidden sm:inline-flex p-1 bg-black/60 border border-white/10 rounded-xl shadow-inner">
+            <div className="hidden sm:inline-flex p-1 bg-bg-elevated border border-ink/10 rounded-xl shadow-inner">
               <button
                 onClick={() => setGridColumns('2')}
                 title="2 Columns Grid"
                 className={`px-2.5 py-1 text-[11px] font-mono rounded-lg transition-all ${
                   gridColumns === '2'
                     ? 'bg-accent-teal/15 text-accent-teal font-bold border border-accent-teal/40'
-                    : 'text-text-dim hover:text-white'
+                    : 'text-text-dim hover:text-text-primary'
                 }`}
               >
                 2 COL
@@ -220,7 +220,7 @@ export const LiveFeedsPage: React.FC = () => {
                 className={`px-2.5 py-1 text-[11px] font-mono rounded-lg transition-all ${
                   gridColumns === '3'
                     ? 'bg-accent-teal/15 text-accent-teal font-bold border border-accent-teal/40'
-                    : 'text-text-dim hover:text-white'
+                    : 'text-text-dim hover:text-text-primary'
                 }`}
               >
                 3 COL
@@ -229,14 +229,14 @@ export const LiveFeedsPage: React.FC = () => {
           )}
 
           {/* Layout Mode Toggle Buttons */}
-          <div className="inline-flex p-1 bg-black/60 border border-white/10 rounded-xl shadow-inner">
+          <div className="inline-flex p-1 bg-bg-elevated border border-ink/10 rounded-xl shadow-inner">
             <button
               onClick={() => setViewMode('grid')}
               title="Grid View"
               className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono font-semibold rounded-lg transition-all ${
                 viewMode === 'grid'
                   ? 'bg-accent-teal/15 text-accent-teal border border-accent-teal/40'
-                  : 'text-text-dim hover:text-white'
+                  : 'text-text-dim hover:text-text-primary'
               }`}
             >
               <Grid2X2 className="w-3.5 h-3.5" />
@@ -249,7 +249,7 @@ export const LiveFeedsPage: React.FC = () => {
               className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono font-semibold rounded-lg transition-all ${
                 viewMode === 'focus'
                   ? 'bg-accent-teal/15 text-accent-teal border border-accent-teal/40'
-                  : 'text-text-dim hover:text-white'
+                  : 'text-text-dim hover:text-text-primary'
               }`}
             >
               <Maximize2 className="w-3.5 h-3.5" />
@@ -261,22 +261,22 @@ export const LiveFeedsPage: React.FC = () => {
 
       {/* Main Surveillance View Area — with no-camera / offline / loading states */}
       {reachable === null && cameras.length === 0 ? (
-        <div role="status" className="card-3d p-10 border border-white/10 rounded-2xl text-center text-xs font-mono text-text-dim">
+        <div role="status" className="card-3d p-10 border border-ink/10 rounded-2xl text-center text-xs font-mono text-text-dim">
           Loading cameras…
         </div>
       ) : reachable === false && cameras.length === 0 ? (
         <div role="alert" className="card-3d p-10 border border-accent-red/40 bg-accent-red/5 rounded-2xl text-center space-y-2">
           <AlertCircle className="w-6 h-6 text-accent-red mx-auto" />
-          <h3 className="text-sm font-semibold text-white">Backend unreachable</h3>
+          <h3 className="text-sm font-semibold text-text-primary">Backend unreachable</h3>
           <p className="text-xs text-text-dim">Start it with ./run.sh up — this page reconnects on its own.</p>
           <Button variant="secondary" size="sm" onClick={() => refresh()}>
             Retry now
           </Button>
         </div>
       ) : cameras.length === 0 ? (
-        <div className="card-3d p-10 border border-dashed border-white/15 rounded-2xl text-center space-y-2">
+        <div className="card-3d p-10 border border-dashed border-ink/15 rounded-2xl text-center space-y-2">
           <Video className="w-6 h-6 text-text-muted mx-auto" />
-          <h3 className="text-sm font-semibold text-white">No cameras configured</h3>
+          <h3 className="text-sm font-semibold text-text-primary">No cameras configured</h3>
           <p className="text-xs text-text-dim">
             Set CAMERA_SOURCES in .env (e.g. cam0=0 for the built-in webcam) or add one here.
           </p>
@@ -404,7 +404,7 @@ export const LiveFeedsPage: React.FC = () => {
                 ? serverNow - focusedCamera.lastFrameAt
                 : null;
             return (
-              <div className="card-3d max-w-5xl mx-auto p-3.5 bg-[#090c12] border border-white/10 rounded-2xl grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-xs shadow-lg">
+              <div className="card-3d max-w-5xl mx-auto p-3.5 bg-bg-surface border border-ink/10 rounded-2xl grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-xs shadow-lg">
                 <div>
                   <span className="text-text-muted block text-[10px] uppercase">Status</span>
                   <span className={`font-semibold ${tone}`}>{st.label}</span>

@@ -41,6 +41,7 @@ import shutil
 import sqlite3
 import threading
 import time
+from datetime import datetime
 
 from fastapi import (
     APIRouter,
@@ -96,7 +97,9 @@ from config.settings import API_TOKEN
 from database.incident_store import RESOLUTION_REASONS, IncidentStore
 from integration import runtime_state
 from integration.live_stream import CameraBusyError, LiveCameraRegistry
-from intelligence.threat_score import GREEN_MAX, YELLOW_MAX
+from intelligence.threat_score import GREEN_MAX, YELLOW_MAX, ZONE_TIER_THRESHOLDS
+from zones.boundary_engine import Boundary, BoundaryEngine
+from zones.zone_policy import VALID_TIERS, ZONE_ROLES, ZonePolicy
 
 # Without this the API process emits no ibvap.* logs at all, so camera
 # open/release, detector readiness and per-frame detector faults all happen
@@ -250,6 +253,7 @@ def _breakdown(row: dict) -> dict:
         "loiterRisk": raw.get("loiter_risk", 0),
         "groupRisk": raw.get("group_risk", 0),
         "overrideReason": raw.get("override_reason"),
+        "elevateReason": raw.get("elevate_reason"),
         "tierCeiling": raw.get("tier_ceiling"),
         "ceilingReason": raw.get("ceiling_reason"),
         "recorded": True,
@@ -259,6 +263,7 @@ def _breakdown(row: dict) -> dict:
 def _what_he_she_is_doing(row: dict, breakdown: dict) -> str:
     tier = str(row.get("tier") or row.get("zone_tier") or "green").lower()
     override = breakdown.get("overrideReason") or ""
+    elevate = breakdown.get("elevateReason") or ""
     direction_risk = float(breakdown.get("directionRisk", 0))
     kinematics_risk = float(breakdown.get("kinematicsRisk", 0))
     loiter_risk = float(breakdown.get("loiterRisk", 0))
@@ -268,6 +273,8 @@ def _what_he_she_is_doing(row: dict, breakdown: dict) -> str:
     actions = []
     if "border" in override.lower() or "cross" in override.lower():
         actions.append("Breached restricted border line")
+    elif "cross" in elevate.lower():
+        actions.append("Crossing detected in YELLOW approach zone")
     elif tier == "red":
         actions.append("Intruded into RED restricted perimeter")
     elif tier == "yellow":
@@ -504,6 +511,10 @@ def _zones_path(camera_id: str) -> str:
     if os.path.exists(p1):
         return p1
     return f"config/zones_{camera_id}.json"
+
+
+def _boundaries_path(camera_id: str) -> str:
+    return f"config/boundaries_{camera_id}.json"
 
 
 def _zone_count(camera_id: str) -> int:
@@ -854,6 +865,185 @@ def v1_camera_stream(camera_id: str, _: None = Depends(require_token_query)):
 
 
 # --------------------------------------------------------------------------
+# Offline video replay — upload a recorded clip, then "activate" it by
+# writing it into .env's CAMERA_SOURCES. Dashboard-added cameras (config/
+# cameras.json, above) are preview-only: the running pipeline reads
+# CAMERA_SOURCES once at startup (config/settings.py), so a video only gets
+# real detection/tracking/zone/scoring once it's in .env AND the pipeline is
+# restarted. This section never starts or reloads the pipeline itself — it
+# only prepares the file and the .env entry, then reports needsRestart so
+# the dashboard can tell the operator to run `./run.sh all`.
+# --------------------------------------------------------------------------
+
+UPLOADS_DIR = "uploads/videos"
+_ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
+ENV_FILE = ".env"
+
+
+def _video_camera_id(filename: str) -> str:
+    """cam_id used in CAMERA_SOURCES for this file. Prefixed with replay_ so
+    it can never collide with a real .env camera like cam0/cam1."""
+    stem = os.path.splitext(filename)[0]
+    slug = re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_") or "clip"
+    return f"replay_{slug}"
+
+
+def _sanitize_video_filename(filename: str) -> str:
+    name = os.path.basename(filename or "")
+    stem, ext = os.path.splitext(name)
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_") or "video"
+    return f"{stem}{ext.lower()}"
+
+
+def _read_env_camera_sources() -> dict:
+    """Reads CAMERA_SOURCES straight out of .env, not the process's own
+    CAMERA_SOURCES import (frozen at process start) — so "active" status
+    always reflects what a restart would actually pick up."""
+    if not os.path.exists(ENV_FILE):
+        return {}
+    with open(ENV_FILE) as f:
+        for line in f:
+            if line.strip().startswith("CAMERA_SOURCES="):
+                from config.settings import _parse_camera_sources
+                raw = line.strip()[len("CAMERA_SOURCES="):]
+                return {k: str(v) for k, v in _parse_camera_sources(raw).items()}
+    return {}
+
+
+def _write_env_camera_sources(sources: dict) -> None:
+    """Rewrites only the CAMERA_SOURCES= line in .env, preserving every
+    other line (comments, ordering, blank lines) exactly."""
+    new_line = "CAMERA_SOURCES=" + ",".join(f"{k}={v}" for k, v in sources.items()) + "\n"
+    lines = []
+    found = False
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE) as f:
+            for line in f:
+                if line.strip().startswith("CAMERA_SOURCES="):
+                    lines.append(new_line)
+                    found = True
+                else:
+                    lines.append(line if line.endswith("\n") else line + "\n")
+    if not found:
+        lines.append(new_line)
+    with open(ENV_FILE, "w") as f:
+        f.writelines(lines)
+
+
+@v1.get("/videos")
+def v1_videos(_: None = Depends(require_token)) -> list:
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    env_sources = _read_env_camera_sources()
+    out = []
+    for filename in sorted(os.listdir(UPLOADS_DIR)):
+        path = os.path.join(UPLOADS_DIR, filename)
+        if not os.path.isfile(path):
+            continue
+        cam_id = _video_camera_id(filename)
+        is_active = cam_id in env_sources
+        out.append({
+            "id": filename,
+            "cameraId": cam_id,
+            "filename": filename,
+            "sizeBytes": os.path.getsize(path),
+            "uploadedAt": datetime.fromtimestamp(os.path.getmtime(path)).isoformat(),
+            "isActive": is_active,
+            "needsRestart": is_active and not _pipeline_owns(cam_id),
+        })
+    return out
+
+
+@v1.post("/videos/upload")
+async def v1_upload_video(
+    request: Request, filename: str, _: None = Depends(require_token)
+) -> dict:
+    """Streams the raw request body straight to disk instead of using
+    FastAPI's multipart UploadFile — this project has no python-multipart
+    dependency, and base64 JSON (as the watchlist photo endpoint uses) would
+    add ~33% overhead and hold a whole video in memory at once."""
+    safe_name = _sanitize_video_filename(filename)
+    ext = os.path.splitext(safe_name)[1].lower()
+    if ext not in _ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video type {ext!r}. Allowed: {sorted(_ALLOWED_VIDEO_EXTENSIONS)}",
+        )
+
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    stem, extension = os.path.splitext(safe_name)
+    dest = os.path.join(UPLOADS_DIR, safe_name)
+    counter = 1
+    while os.path.exists(dest):
+        safe_name = f"{stem}_{counter}{extension}"
+        dest = os.path.join(UPLOADS_DIR, safe_name)
+        counter += 1
+
+    tmp_path = dest + ".part"
+    written = 0
+    try:
+        with open(tmp_path, "wb") as f:
+            async for chunk in request.stream():
+                written += len(chunk)
+                if written > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Video exceeds the 1 GiB upload limit.")
+                f.write(chunk)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    if written == 0:
+        os.remove(tmp_path)
+        raise HTTPException(status_code=400, detail="Empty upload.")
+    os.replace(tmp_path, dest)
+
+    return {
+        "id": safe_name,
+        "cameraId": _video_camera_id(safe_name),
+        "filename": safe_name,
+        "sizeBytes": written,
+    }
+
+
+@v1.post("/videos/{video_id}/activate")
+def v1_activate_video(video_id: str, _: None = Depends(require_token)) -> dict:
+    path = os.path.join(UPLOADS_DIR, video_id)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"No uploaded video {video_id!r}.")
+    cam_id = _video_camera_id(video_id)
+    sources = _read_env_camera_sources()
+    sources[cam_id] = os.path.abspath(path)
+    _write_env_camera_sources(sources)
+    return {"cameraId": cam_id, "needsRestart": True}
+
+
+@v1.post("/videos/{video_id}/deactivate")
+def v1_deactivate_video(video_id: str, _: None = Depends(require_token)) -> dict:
+    cam_id = _video_camera_id(video_id)
+    sources = _read_env_camera_sources()
+    if cam_id not in sources:
+        return {"cameraId": cam_id, "needsRestart": False}
+    del sources[cam_id]
+    _write_env_camera_sources(sources)
+    return {"cameraId": cam_id, "needsRestart": True}
+
+
+@v1.delete("/videos/{video_id}")
+def v1_delete_video(video_id: str, _: None = Depends(require_token)) -> dict:
+    path = os.path.join(UPLOADS_DIR, video_id)
+    cam_id = _video_camera_id(video_id)
+    sources = _read_env_camera_sources()
+    needs_restart = False
+    if cam_id in sources:
+        del sources[cam_id]
+        _write_env_camera_sources(sources)
+        needs_restart = True
+    if os.path.isfile(path):
+        os.remove(path)
+    return {"success": True, "id": video_id, "needsRestart": needs_restart}
+
+
+# --------------------------------------------------------------------------
 # Zones
 # --------------------------------------------------------------------------
 
@@ -889,9 +1079,15 @@ def v1_zones(_: None = Depends(require_token)) -> dict:
                 "id": z.get("id", f"zone-{cam_id}-{i}"),
                 "cameraName": cam_id,
                 "tier": z.get("zone_type", "green"),
+                # The operator-facing label (restricted/buffer/transit/
+                # authorized), if this zone was saved with one. Absent/None
+                # for zones saved before roles existed, or drawn directly
+                # with a raw tier - those keep working exactly as before.
+                "role": z.get("role"),
                 "points": _to_normalised(z.get("polygon", [])),
                 "label": z.get("label", f"{z.get('zone_type', 'zone')} zone"),
                 "direction": z.get("direction"),
+                "enabled": z.get("enabled", True),
                 "tripwireEnabled": z.get("tripwireEnabled", False),
                 "loiteringThresholdSeconds": z.get("loiteringThresholdSeconds"),
                 "climbingDetection": z.get("climbingDetection", False),
@@ -903,6 +1099,7 @@ def v1_zones(_: None = Depends(require_token)) -> dict:
 
 @v1.put("/zones")
 def v1_save_zones(zones: dict = Body(...), _: None = Depends(require_token)) -> dict:
+    policy = ZonePolicy()
     written = {}
     for cam_id, cam_zones in zones.items():
         if cam_id not in _camera_sources():
@@ -915,13 +1112,32 @@ def v1_save_zones(zones: dict = Body(...), _: None = Depends(require_token)) -> 
                     status_code=422,
                     detail=f"Zone {z.get('id', i)} on {cam_id} has fewer than 2 points.",
                 )
+            role = z.get("role")
+            if role is not None and role not in ZONE_ROLES:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Zone {z.get('id', i)} on {cam_id} has unknown role {role!r}.",
+                )
+            # A role resolves to a tier via the configurable policy - the
+            # zone_type written to disk is always a plain red/yellow/green
+            # tier either way, so ZoneEngine/ThreatScorer need no changes to
+            # read a zone saved with a role. An explicit "tier" still wins
+            # if no role was given, exactly as before roles existed.
+            tier = policy.tier_for_role(role) or z.get("tier", "green")
+            if tier not in VALID_TIERS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Zone {z.get('id', i)} on {cam_id} has invalid tier {tier!r}.",
+                )
             payload.append(
                 {
-                    "zone_type": z.get("tier", "green"),
+                    "zone_type": tier,
+                    "role": role,
                     "polygon": polygon,
                     "id": z.get("id", f"zone-{cam_id}-{i}"),
                     "label": z.get("label", ""),
                     "direction": z.get("direction"),
+                    "enabled": z.get("enabled", True),
                     "tripwireEnabled": z.get("tripwireEnabled", False),
                     "loiteringThresholdSeconds": z.get("loiteringThresholdSeconds"),
                     "climbingDetection": z.get("climbingDetection", False),
@@ -933,6 +1149,74 @@ def v1_save_zones(zones: dict = Body(...), _: None = Depends(require_token)) -> 
             json.dump(payload, f, indent=2)
         written[cam_id] = payload
     return v1_zones()
+
+
+@v1.get("/zone-policy")
+def v1_zone_policy(_: None = Depends(require_token)) -> dict:
+    return ZonePolicy().as_dict()
+
+
+@v1.put("/zone-policy")
+def v1_save_zone_policy(mapping: dict = Body(...), _: None = Depends(require_token)) -> dict:
+    policy = ZonePolicy()
+    try:
+        policy.update(mapping)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return policy.as_dict()
+
+
+# --------------------------------------------------------------------------
+# Boundaries (virtual tripwires) — kept separate from zones on purpose; see
+# zones/boundary_engine.py. Detected and shown to the operator, never fed
+# into scoring or incidents.
+# --------------------------------------------------------------------------
+
+
+@v1.get("/boundaries")
+def v1_boundaries(_: None = Depends(require_token)) -> dict:
+    out = {}
+    for cam_id in _camera_sources():
+        engine = BoundaryEngine(config_path=_boundaries_path(cam_id))
+        out[cam_id] = [
+            {
+                "id": b.id,
+                "cameraName": cam_id,
+                "label": b.label,
+                "p1": {"x": round(b.line.p1[0] / CAMERA_WIDTH, 6), "y": round(b.line.p1[1] / CAMERA_HEIGHT, 6)},
+                "p2": {"x": round(b.line.p2[0] / CAMERA_WIDTH, 6), "y": round(b.line.p2[1] / CAMERA_HEIGHT, 6)},
+                "enabled": b.enabled,
+            }
+            for b in engine.boundaries
+        ]
+    return out
+
+
+@v1.put("/boundaries")
+def v1_save_boundaries(boundaries: dict = Body(...), _: None = Depends(require_token)) -> dict:
+    for cam_id, cam_boundaries in boundaries.items():
+        if cam_id not in _camera_sources():
+            continue
+        engine = BoundaryEngine()
+        for i, b in enumerate(cam_boundaries):
+            p1, p2 = b.get("p1"), b.get("p2")
+            if not p1 or not p2:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Boundary {b.get('id', i)} on {cam_id} needs both p1 and p2.",
+                )
+            engine.boundaries.append(
+                Boundary(
+                    id=b.get("id", f"boundary-{cam_id}-{i}"),
+                    label=b.get("label", ""),
+                    p1=(p1["x"] * CAMERA_WIDTH, p1["y"] * CAMERA_HEIGHT),
+                    p2=(p2["x"] * CAMERA_WIDTH, p2["y"] * CAMERA_HEIGHT),
+                    enabled=b.get("enabled", True),
+                )
+            )
+        engine.config_path = _boundaries_path(cam_id)
+        engine.save()
+    return v1_boundaries()
 
 
 # --------------------------------------------------------------------------
@@ -1227,7 +1511,15 @@ def v1_meta(_: None = Depends(require_token)) -> dict:
     validates against them."""
     return {
         "resolutionReasons": RESOLUTION_REASONS,
+        # There's no single yellow/red threshold anymore - each zone tier has
+        # its own sensitivity (see ZONE_TIER_THRESHOLDS). Keeping the flat
+        # "yellow"/"red" pair too, as the GREEN-zone/no-zone values, so any
+        # older reader expecting the old shape still gets a sane number.
         "tierThresholds": {"yellow": GREEN_MAX + 1, "red": YELLOW_MAX + 1},
+        "tierThresholdsByZone": {
+            zone: {"yellow": lo + 1, "red": hi + 1}
+            for zone, (lo, hi) in ZONE_TIER_THRESHOLDS.items()
+        },
         "cameraResolution": f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}",
         "livePublishFps": runtime_state.LIVE_PUBLISH_FPS,
     }

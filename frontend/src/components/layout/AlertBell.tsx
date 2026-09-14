@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAlerts } from '@/components/alerts/AlertProvider';
+import { threatStatusLabel } from '@/lib/threatStatus';
 import {
   Bell,
   BellOff,
@@ -65,9 +66,9 @@ export const AlertBell: React.FC = () => {
       <button
         onClick={() => setIsOpen((prev) => !prev)}
         aria-label="Open notifications center"
-        className={`relative p-2 rounded-xl text-text-dim hover:text-white hover:bg-white/[0.08] transition-colors border ${
+        className={`relative p-2 rounded-xl text-text-dim hover:text-text-primary hover:bg-ink/[0.08] transition-colors border ${
           isOpen
-            ? 'bg-white/[0.08] text-white border-white/20'
+            ? 'bg-ink/[0.08] text-text-primary border-ink/20'
             : 'border-transparent'
         }`}
       >
@@ -83,11 +84,11 @@ export const AlertBell: React.FC = () => {
 
       {/* Dropdown Panel */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-[#090c12] border border-white/10 shadow-2xl z-50 overflow-hidden backdrop-blur-2xl">
+        <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-bg-surface border border-ink/10 shadow-2xl z-50 overflow-hidden backdrop-blur-2xl">
           {/* Header */}
-          <div className="p-3.5 bg-[#07090f] border-b border-white/[0.08] flex items-center justify-between">
+          <div className="p-3.5 bg-bg-primary border-b border-ink/[0.08] flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="font-mono text-xs font-bold tracking-wider text-white flex items-center gap-1.5">
+              <span className="font-mono text-xs font-bold tracking-wider text-text-primary flex items-center gap-1.5">
                 <Radio className="w-3.5 h-3.5 text-accent-teal" />
                 TACTICAL ALERTS
               </span>
@@ -106,7 +107,7 @@ export const AlertBell: React.FC = () => {
                 className={`flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
                   popupsMuted
                     ? 'bg-accent-yellow/20 text-accent-yellow border-accent-yellow/40'
-                    : 'text-text-dim border-white/10 hover:text-white hover:bg-white/[0.05]'
+                    : 'text-text-dim border-ink/10 hover:text-text-primary hover:bg-ink/[0.05]'
                 }`}
                 title="Mute on-screen popups"
               >
@@ -128,7 +129,7 @@ export const AlertBell: React.FC = () => {
           </div>
 
           {/* Alert List */}
-          <div className="max-h-72 overflow-y-auto divide-y divide-white/[0.06]">
+          <div className="max-h-72 overflow-y-auto divide-y divide-ink/[0.06]">
             {recentAlerts.length === 0 ? (
               <div className="p-6 text-center text-text-dim text-xs font-mono">
                 No telemetry alerts recorded yet.
@@ -146,7 +147,7 @@ export const AlertBell: React.FC = () => {
                       setIsOpen(false);
                       navigate(`/live?camera=${alert.cameraName}`);
                     }}
-                    className={`p-3 hover:bg-white/[0.06] transition-colors cursor-pointer flex items-start gap-2.5 ${
+                    className={`p-3 hover:bg-ink/[0.06] transition-colors cursor-pointer flex items-start gap-2.5 ${
                       isRed ? 'bg-accent-red/5' : ''
                     }`}
                   >
@@ -169,7 +170,7 @@ export const AlertBell: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-1">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs font-bold text-white uppercase">
+                          <span className="font-mono text-xs font-bold text-text-primary uppercase">
                             {alert.cameraName}
                           </span>
                           <span
@@ -181,7 +182,7 @@ export const AlertBell: React.FC = () => {
                                 : 'bg-accent-green/20 text-accent-green border border-accent-green/30'
                             }`}
                           >
-                            {alert.tier.toUpperCase()}
+                            {threatStatusLabel(alert.tier)}
                           </span>
                         </div>
                         <span className="font-mono text-[10px] text-text-dim shrink-0">
@@ -190,7 +191,7 @@ export const AlertBell: React.FC = () => {
                       </div>
 
                       <div className="text-[11px] text-text-dim mt-1 flex items-center justify-between">
-                        <span className="font-semibold text-white">
+                        <span className="font-semibold text-text-primary">
                           {alert.category === 'person'
                             ? 'Person Detection'
                             : alert.category === 'vehicle'
@@ -227,7 +228,7 @@ export const AlertBell: React.FC = () => {
           </div>
 
           {/* Footer */}
-          <div className="p-2.5 bg-white/[0.02] border-t border-white/[0.08] flex items-center justify-center">
+          <div className="p-2.5 bg-ink/[0.02] border-t border-ink/[0.08] flex items-center justify-center">
             <Button
               variant="ghost"
               size="sm"

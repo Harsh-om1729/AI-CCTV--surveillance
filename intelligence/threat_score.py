@@ -3,12 +3,27 @@ from intelligence.threat_rules import ThreatRulesDB
 GREEN_MAX = 30
 YELLOW_MAX = 69
 
+# Zone sensitivity policy. RED/YELLOW/GREEN aren't just a flat point value
+# added into the total (sector_risk, below) - they also change how much
+# total score it takes to escalate, which is what makes "RED = high
+# sensitivity, YELLOW = medium, GREEN = low" true of the actual thresholds,
+# not only of one input term. GREEN and "no zone" keep the original,
+# longest-tested thresholds (GREEN_MAX/YELLOW_MAX) unchanged, so existing
+# no-zone and green-zone behaviour is untouched by this.
+ZONE_TIER_THRESHOLDS: dict[str, tuple[float, float]] = {
+    "red": (12.0, 40.0),
+    "yellow": (22.0, 55.0),
+    "green": (float(GREEN_MAX), float(YELLOW_MAX)),
+    "none": (float(GREEN_MAX), float(YELLOW_MAX)),
+}
+
 
 class ThreatScore:
     __slots__ = (
         "sector_risk", "time_risk", "kinematics_risk", "class_confidence",
         "direction_risk", "loiter_risk", "group_risk", "total", "tier",
-        "override_reason", "tier_ceiling", "ceiling_reason",
+        "zone_tier", "override_reason", "elevate_reason",
+        "tier_ceiling", "ceiling_reason",
     )
 
     # A breach of the border line is a priority event whatever the clock says.
@@ -30,7 +45,9 @@ class ThreatScore:
         direction_risk: float = 0.0,
         loiter_risk: float = 0.0,
         group_risk: float = 0.0,
+        zone_tier: str = "none",
         override_reason: "str | None" = None,
+        elevate_reason: "str | None" = None,
         tier_ceiling: "str | None" = None,
         ceiling_reason: "str | None" = None,
     ):
@@ -41,14 +58,21 @@ class ThreatScore:
         self.direction_risk = direction_risk
         self.loiter_risk = loiter_risk
         self.group_risk = group_risk
+        self.zone_tier = zone_tier
         self.total = min(
             100.0,
             sector_risk + time_risk + kinematics_risk + class_confidence
             + direction_risk + loiter_risk + group_risk,
         )
-        if self.total <= GREEN_MAX:
+        # Which score buys which tier depends on the zone's own sensitivity -
+        # see ZONE_TIER_THRESHOLDS. A RED zone reaches Yellow/Red on far less
+        # total than a GREEN one needs for the identical behaviour.
+        green_max, yellow_max = ZONE_TIER_THRESHOLDS.get(
+            zone_tier or "none", (float(GREEN_MAX), float(YELLOW_MAX))
+        )
+        if self.total <= green_max:
             self.tier = "green"
-        elif self.total <= YELLOW_MAX:
+        elif self.total <= yellow_max:
             self.tier = "yellow"
         else:
             self.tier = "red"
@@ -57,6 +81,19 @@ class ThreatScore:
         if override_reason is not None:
             self.tier = "red"
             self.total = max(self.total, self.OVERRIDE_MIN_TOTAL)
+
+        # Medium sensitivity for YELLOW: a crossing there guarantees at least
+        # a Caution-level alert (not a full Red siren the way RED's override
+        # does) even if the additive total alone would have stayed Green.
+        # Skipped once already overridden to Red - nothing to add there.
+        self.elevate_reason = elevate_reason
+        if (
+            elevate_reason is not None
+            and override_reason is None
+            and self.TIER_RANK[self.tier] < self.TIER_RANK["yellow"]
+        ):
+            self.tier = "yellow"
+            self.total = max(self.total, green_max + 1.0)
 
         # Phase 18: the ceiling is applied last, so it binds the overrides too.
         # An override says "this pattern matters"; the ceiling says "we cannot
@@ -73,13 +110,15 @@ class ThreatScore:
 
     @property
     def level(self) -> str:
-        if self.total <= GREEN_MAX:
+        # Derived from .tier, not re-computed from .total against the fixed
+        # GREEN_MAX/YELLOW_MAX - tier already accounts for zone sensitivity,
+        # overrides and elevation, and this must always agree with it (a
+        # "Red" tier reading "Threat level: MEDIUM" would look like a bug).
+        if self.tier == "green":
             return "LOW"
-        if self.total <= YELLOW_MAX:
+        if self.tier == "yellow":
             return "MEDIUM"
-        if self.total < 90.0:
-            return "HIGH"
-        return "CRITICAL"
+        return "CRITICAL" if self.total >= 90.0 else "HIGH"
 
     @property
     def threat_level(self) -> str:
@@ -90,6 +129,8 @@ class ThreatScore:
         items = []
         if self.override_reason:
             items.append(f"Override: {self.override_reason}")
+        if self.elevate_reason:
+            items.append(f"Elevated: {self.elevate_reason}")
         if self.sector_risk >= 25 or (self.override_reason and "border" in self.override_reason.lower()):
             items.append(f"Entered RED zone (+{self.sector_risk:.0f})")
         elif self.sector_risk > 0:
@@ -123,6 +164,8 @@ class ThreatScore:
         summary = " + ".join(f"{n} {v:.0f}" for n, v in parts if v > 0) or "none"
         if self.override_reason is not None:
             summary += f"  [forced RED: {self.override_reason}]"
+        elif self.elevate_reason is not None:
+            summary += f"  [raised to YELLOW: {self.elevate_reason}]"
         if self.ceiling_reason is not None and self.tier_ceiling is not None:
             summary += f"  [capped at {self.tier_ceiling.upper()}: {self.ceiling_reason}]"
         return summary
@@ -135,8 +178,11 @@ class ThreatScorer:
             + D_direction + L_loiter + G_group
 
     0-30 -> Green (log), 31-69 -> Yellow (warn+snapshot), 70-100 -> Red
-    (priority). Deliberately transparent: a sentry sees *why* something scored
-    Red — which component drove it — not just a black-box alert.
+    (priority) *in a GREEN zone or with no zone drawn*. RED and YELLOW zones
+    use lower thresholds of their own (see ZONE_TIER_THRESHOLDS) — the same
+    behaviour escalates faster the more sensitive the zone it happens in.
+    Deliberately transparent: a sentry sees *why* something scored Red —
+    which component drove it — not just a black-box alert.
 
     The last three terms are what make this a *border* rule set rather than a
     generic intrusion alarm:
@@ -188,14 +234,19 @@ class ThreatScorer:
         # A watchlist hit outranks a crossing: it names *who* this is, not just
         # what they did. Both are reported the same way so the log states the
         # cause either way.
-        override_reason = self._watchlist_override(
-            watchlist_match, watchlist_similarity
-        ) or self._crossing_override(zone_tier, zone_direction, category)
+        override_reason = (
+            self._watchlist_override(watchlist_match, watchlist_similarity)
+            or self._crossing_override(zone_tier, zone_direction, category)
+            or self._running_override(speed_px_per_frame, category)
+        )
+        elevate_reason = self._yellow_elevate(zone_tier, zone_direction, category)
 
         return ThreatScore(
             sector_risk, time_risk, kinematics_risk, class_confidence,
             direction_risk, loiter_risk, group_risk,
+            zone_tier=zone_tier or "none",
             override_reason=override_reason,
+            elevate_reason=elevate_reason,
             tier_ceiling=None if in_zone else self.NO_ZONE_CEILING,
             ceiling_reason=None if in_zone else "no zone defined for this camera",
         )
@@ -232,6 +283,39 @@ class ThreatScorer:
         if zone_direction not in self.CROSSING_DIRECTIONS:
             return None
         return f"{category} crossing the border line ({zone_direction})"
+
+    # YELLOW's medium sensitivity: the same crossing motion that forces RED
+    # in a red zone only guarantees a Caution-level alert here — a buffer/
+    # approach zone should raise attention, not fire the same siren as the
+    # restricted core. See ThreatScore.__init__'s elevate_reason handling.
+    def _yellow_elevate(
+        self, zone_tier: str, zone_direction: "str | None", category: str
+    ) -> "str | None":
+        if zone_tier != "yellow":
+            return None
+        if category not in self.OVERRIDE_CATEGORIES:
+            return None
+        if zone_direction not in self.CROSSING_DIRECTIONS:
+            return None
+        return f"{category} crossing the approach zone ({zone_direction})"
+
+    # A sprinting person is the clearest anomaly a border sentry reacts to on
+    # sight, in any direction - a dash toward the line is infiltration, a
+    # dash away from it is someone fleeing after a crossing. The additive
+    # kinematics term (below) caps a runner's contribution at the same
+    # max_movement_risk a motionless person gets (deliberately - see the
+    # U-curve docstring), which buries "running" as a minor +10 among six
+    # other terms instead of surfacing it. This mirrors the watchlist/
+    # crossing overrides: it forces Red outright rather than waiting for the
+    # additive total to get there, so a running person is never one zone or
+    # one time-of-day away from staying Yellow.
+    def _running_override(self, speed_px_per_frame: float, category: str) -> "str | None":
+        if category != "person":
+            return None
+        fast = self.rules.get_movement_config()["fast_speed_px_per_frame"]
+        if speed_px_per_frame < fast:
+            return None
+        return f"person running ({speed_px_per_frame:.1f}px/frame >= {fast:.0f} sprint threshold)"
 
     def _kinematics_risk(self, speed: float) -> float:
         r"""U-curve: both near-stationary and running score high, an ordinary

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch IBVAP from any working directory.
-#   ./run.sh          # live OpenCV app
+#   ./run.sh          # live OpenCV apps
 #   ./run.sh dash     # Streamlit incident dashboard (fallback UI)
 #   ./run.sh api      # FastAPI backend on :8000, serves /api/v1
 #   ./run.sh web      # React dashboard on :5173 (needs ./run.sh api too)

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAlerts } from './AlertProvider';
+import { threatStatusLabel } from '@/lib/threatStatus';
 import {
   AlertTriangle,
   ShieldAlert,
@@ -57,13 +58,13 @@ export const AlertToastContainer: React.FC = () => {
             key={toast.id}
             className={`pointer-events-auto rounded-xl transition-colors duration-150 ${
               isRed
-                ? 'bg-[#090c12] border border-accent-red/50 shadow-2xl'
-                : 'bg-[#090c12] border border-accent-yellow/50 shadow-2xl'
+                ? 'bg-bg-surface border border-accent-red/50 shadow-2xl'
+                : 'bg-bg-surface border border-accent-yellow/50 shadow-2xl'
             } p-3.5 relative overflow-hidden`}
           >
             {/* Countdown bar for yellow alerts (6s) */}
             {!isRed && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/10 overflow-hidden">
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-ink/10 overflow-hidden">
                 <div
                   className="h-full bg-accent-yellow transition-all linear"
                   style={{
@@ -74,21 +75,21 @@ export const AlertToastContainer: React.FC = () => {
             )}
 
             {/* Header: Tier + Camera + Mute Popups + Close Button */}
-            <div className="flex items-center justify-between gap-2 mb-2 pb-1.5 border-b border-white/[0.08]">
+            <div className="flex items-center justify-between gap-2 mb-2 pb-1.5 border-b border-ink/[0.08]">
               <div className="flex items-center gap-2">
                 {isRed ? (
                   <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-accent-red/15 text-accent-red font-mono text-[10px] font-bold tracking-wider border border-accent-red/30">
                     <ShieldAlert className="w-3 h-3" />
-                    CRITICAL THREAT
+                    {threatStatusLabel('red').toUpperCase()}
                   </span>
                 ) : (
                   <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-accent-yellow/15 text-accent-yellow font-mono text-[10px] font-medium tracking-wider border border-accent-yellow/30">
                     <AlertTriangle className="w-3 h-3" />
-                    CAUTION DETECT
+                    {threatStatusLabel('yellow').toUpperCase()}
                   </span>
                 )}
 
-                <span className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                <span className="font-mono text-xs font-bold text-text-primary uppercase tracking-wider">
                   {toast.cameraName}
                 </span>
               </div>
@@ -99,7 +100,7 @@ export const AlertToastContainer: React.FC = () => {
                 <button
                   onClick={toggleMutePopups}
                   title="Mute popup notifications (won't show on screen)"
-                  className="px-1.5 py-0.5 rounded text-text-dim hover:text-accent-yellow hover:bg-white/[0.08] transition-colors flex items-center gap-1 text-[10px] font-mono border border-white/10"
+                  className="px-1.5 py-0.5 rounded text-text-dim hover:text-accent-yellow hover:bg-ink/[0.08] transition-colors flex items-center gap-1 text-[10px] font-mono border border-ink/10"
                 >
                   <BellOff className="w-3 h-3" />
                   <span>Mute</span>
@@ -108,7 +109,7 @@ export const AlertToastContainer: React.FC = () => {
                 <button
                   onClick={() => dismissToast(toast.id)}
                   aria-label="Dismiss alert"
-                  className="p-1 rounded text-text-dim hover:text-white hover:bg-white/[0.08] transition-colors"
+                  className="p-1 rounded text-text-dim hover:text-text-primary hover:bg-ink/[0.08] transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -132,7 +133,7 @@ export const AlertToastContainer: React.FC = () => {
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-white font-semibold text-[11px] tracking-tight">
+                  <span className="text-text-primary font-semibold text-[11px] tracking-tight">
                     {getCategoryLabel(toast.category)}
                   </span>
                   <span
@@ -159,12 +160,12 @@ export const AlertToastContainer: React.FC = () => {
             </div>
 
             {/* Action Buttons Footer */}
-            <div className="mt-2.5 pt-2 border-t border-white/[0.08] flex items-center justify-end gap-2">
+            <div className="mt-2.5 pt-2 border-t border-ink/[0.08] flex items-center justify-end gap-2">
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => acknowledgeAlert(toast.id)}
-                className="text-[11px] h-7 px-2.5 text-text-dim hover:text-white"
+                className="text-[11px] h-7 px-2.5 text-text-dim hover:text-text-primary"
               >
                 <CheckCircle2 className="w-3 h-3 mr-1" />
                 Acknowledge
@@ -193,7 +194,7 @@ export const AlertToastContainer: React.FC = () => {
             variant="neutral"
             size="sm"
             onClick={() => navigate('/detections')}
-            className="cursor-pointer hover:bg-white/[0.08] transition-colors border border-white/15 font-mono text-[10px]"
+            className="cursor-pointer hover:bg-ink/[0.08] transition-colors border border-ink/15 font-mono text-[10px]"
           >
             +{overflowCount} more unread alerts →
           </Badge>

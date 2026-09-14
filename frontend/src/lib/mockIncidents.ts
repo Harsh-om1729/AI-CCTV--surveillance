@@ -7,6 +7,7 @@ export interface ThreatScoreBreakdown {
   loiterRisk?: number;
   groupRisk?: number;
   overrideReason?: string | null;
+  elevateReason?: string | null;
   tierCeiling?: string | null;
   ceilingReason?: string | null;
   threatLevel?: string;

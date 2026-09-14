@@ -307,7 +307,7 @@ export const SettingsPage: React.FC = () => {
                         <div className="text-lg font-bold text-text-primary font-mono">{m.value}</div>
                         {m.pct != null && (
                           <div
-                            className="h-1.5 rounded bg-white/10 overflow-hidden"
+                            className="h-1.5 rounded bg-ink/10 overflow-hidden"
                             role="meter"
                             aria-label={`${m.label} usage`}
                             aria-valuenow={Math.round(m.pct)}

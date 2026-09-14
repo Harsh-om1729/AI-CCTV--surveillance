@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import type { Zone } from '@/lib/mockZones';
+import type { Boundary, Zone, ZoneRole } from '@/lib/mockZones';
+import { ZONE_ROLES } from '@/lib/mockZones';
 import { useSystemHealth } from '@/components/system/SystemHealthProvider';
-import { zonesApi } from '@/lib/api';
+import { boundariesApi, cameraStreamUrl, zonePolicyApi, zonesApi } from '@/lib/api';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { ZONE_PRESETS, ZonePreset } from '@/lib/zonePresets';
 import { ZoneCanvas } from '@/components/zones';
@@ -25,6 +26,9 @@ import {
   Copy,
   Sparkles,
   ChevronDown,
+  Milestone,
+  Settings2,
+  Power,
 } from 'lucide-react';
 
 const ZONES_STORAGE_KEY = 'ibvap_zones_data';
@@ -86,9 +90,72 @@ export const ZonesPage: React.FC = () => {
 
   // Form Fields
   const [formTier, setFormTier] = useState<'green' | 'yellow' | 'red'>('red');
+  const [formRole, setFormRole] = useState<ZoneRole | null>('restricted');
   const [formLabel, setFormLabel] = useState('');
   const [formDirection, setFormDirection] = useState<'inward' | 'outward'>('inward');
+  const [formEnabled, setFormEnabled] = useState(true);
   const [formError, setFormError] = useState('');
+
+  // The configurable role -> severity mapping (zones/zone_policy.py). Picking
+  // a role in the form resolves its tier from here, so scoring always agrees
+  // with what the operator sees — ZoneEngine/ThreatScorer never see the role
+  // name itself, only the tier this resolves to.
+  const [zonePolicy, setZonePolicy] = useState<Record<string, string>>({
+    restricted: 'red',
+    buffer: 'yellow',
+    transit: 'yellow',
+    authorized: 'green',
+  });
+  const [isPolicyModalOpen, setIsPolicyModalOpen] = useState(false);
+  const [policyDraft, setPolicyDraft] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await zonePolicyApi.getPolicy();
+      if (!cancelled && !res.isFallback && res.data) setZonePolicy(res.data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSelectRole = (role: ZoneRole) => {
+    setFormRole(role);
+    const resolved = zonePolicy[role];
+    if (resolved === 'red' || resolved === 'yellow' || resolved === 'green') {
+      setFormTier(resolved);
+    }
+  };
+
+  // --- Virtual boundaries (tripwires) — a separate entity from zones. See
+  // zones/boundary_engine.py: detected independently of zone entry, shown to
+  // the operator, not fed into scoring in this pass. ---
+  const [allBoundaries, setAllBoundaries] = useState<Boundary[]>([]);
+  const [isBoundaryDrawing, setIsBoundaryDrawing] = useState(false);
+  const [selectedBoundaryId, setSelectedBoundaryId] = useState<string | null>(null);
+  const [isBoundaryFormOpen, setIsBoundaryFormOpen] = useState(false);
+  const [editingBoundary, setEditingBoundary] = useState<Boundary | null>(null);
+  const [boundaryInProgressPoints, setBoundaryInProgressPoints] = useState<{ x: number; y: number }[]>([]);
+  const [boundaryFormLabel, setBoundaryFormLabel] = useState('');
+  const [boundaryFormEnabled, setBoundaryFormEnabled] = useState(true);
+  const [boundarySaveError, setBoundarySaveError] = useState<string | null>(null);
+  const [isBoundaryMock, setIsBoundaryMock] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await boundariesApi.getBoundaries();
+      if (cancelled) return;
+      setIsBoundaryMock(res.isFallback);
+      if (!res.isFallback && res.data) setAllBoundaries(Object.values(res.data).flat());
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const cameraBoundaries = allBoundaries.filter((b) => b.cameraName === selectedCamera);
 
   // Confirmation & Toast Feedback
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
@@ -115,9 +182,10 @@ export const ZonesPage: React.FC = () => {
     setIsDrawing(false);
     setInProgressPoints(points);
     setEditingZone(null);
-    setFormTier('red');
+    handleSelectRole('restricted');
     setFormLabel(`Priority Zone ${cameraZones.length + 1}`);
     setFormDirection('inward');
+    setFormEnabled(true);
     setFormError('');
     setIsFormOpen(true);
   };
@@ -126,8 +194,13 @@ export const ZonesPage: React.FC = () => {
   const handleOpenEditZone = (zone: Zone) => {
     setEditingZone(zone);
     setFormTier(zone.tier);
+    // A zone saved before roles existed (or drawn with a raw tier) has no
+    // role — best-guess one from its tier so the picker still starts
+    // somewhere sensible; saving attaches a real role going forward.
+    setFormRole(zone.role ?? (zone.tier === 'red' ? 'restricted' : zone.tier === 'yellow' ? 'buffer' : 'authorized'));
     setFormLabel(zone.label);
     setFormDirection(zone.direction || 'inward');
+    setFormEnabled(zone.enabled ?? true);
     setFormError('');
     setIsFormOpen(true);
   };
@@ -147,8 +220,10 @@ export const ZonesPage: React.FC = () => {
           return {
             ...z,
             tier: formTier,
+            role: formRole,
             label: formLabel.trim(),
             direction: formTier === 'yellow' ? formDirection : undefined,
+            enabled: formEnabled,
           };
         }
         return z;
@@ -161,13 +236,15 @@ export const ZonesPage: React.FC = () => {
         id: `zone-${selectedCamera}-${Date.now()}`,
         cameraName: selectedCamera,
         tier: formTier,
+        role: formRole,
         label: formLabel.trim(),
         points: inProgressPoints,
         direction: formTier === 'yellow' ? formDirection : undefined,
+        enabled: formEnabled,
       };
       setAllZones((prev) => [...prev, newZone]);
       setSelectedZoneId(newZone.id);
-      showToast(`New ${formTier.toUpperCase()} zone registered on ${selectedCamera.toUpperCase()}`);
+      showToast(`New ${formRole ? ZONE_ROLES.find((r) => r.value === formRole)?.label : formTier.toUpperCase()} zone registered on ${selectedCamera.toUpperCase()}`);
     }
 
     setIsFormOpen(false);
@@ -342,6 +419,90 @@ export const ZonesPage: React.FC = () => {
     showToast(`Copied ${cloned.length} zones from ${sourceCamera.toUpperCase()} to ${selectedCamera.toUpperCase()}`);
   };
 
+  // --- Boundary (tripwire) handlers — mirror the zone handlers above, kept
+  // as their own flow rather than reusing the zone form, since a boundary
+  // has no tier/direction/points-count in common with a zone. ---
+  const handleFinishBoundaryDrawing = (points: { x: number; y: number }[]) => {
+    setIsBoundaryDrawing(false);
+    setBoundaryInProgressPoints(points);
+    setEditingBoundary(null);
+    setBoundaryFormLabel(`Boundary ${cameraBoundaries.length + 1}`);
+    setBoundaryFormEnabled(true);
+    setIsBoundaryFormOpen(true);
+  };
+
+  const handleOpenEditBoundary = (boundary: Boundary) => {
+    setEditingBoundary(boundary);
+    setBoundaryFormLabel(boundary.label);
+    setBoundaryFormEnabled(boundary.enabled);
+    setIsBoundaryFormOpen(true);
+  };
+
+  const handleSaveBoundaryForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingBoundary) {
+      setAllBoundaries((prev) =>
+        prev.map((b) =>
+          b.id === editingBoundary.id ? { ...b, label: boundaryFormLabel.trim(), enabled: boundaryFormEnabled } : b
+        )
+      );
+      showToast(`Boundary "${boundaryFormLabel}" updated`);
+    } else {
+      const [p1, p2] = boundaryInProgressPoints;
+      const newBoundary: Boundary = {
+        id: `boundary-${selectedCamera}-${Date.now()}`,
+        cameraName: selectedCamera,
+        label: boundaryFormLabel.trim() || 'Untitled boundary',
+        p1,
+        p2,
+        enabled: boundaryFormEnabled,
+      };
+      setAllBoundaries((prev) => [...prev, newBoundary]);
+      setSelectedBoundaryId(newBoundary.id);
+      showToast(`New boundary registered on ${selectedCamera.toUpperCase()}`);
+    }
+    setIsBoundaryFormOpen(false);
+    setBoundaryInProgressPoints([]);
+    setEditingBoundary(null);
+  };
+
+  const handleDeleteBoundary = (id: string) => {
+    setAllBoundaries((prev) => prev.filter((b) => b.id !== id));
+    if (selectedBoundaryId === id) setSelectedBoundaryId(null);
+    showToast('Boundary removed');
+  };
+
+  const handleToggleBoundaryEnabled = (id: string) => {
+    setAllBoundaries((prev) => prev.map((b) => (b.id === id ? { ...b, enabled: !b.enabled } : b)));
+  };
+
+  const handleSaveBoundariesProfile = async () => {
+    const grouped: Record<string, Boundary[]> = {};
+    for (const cam of availableCameras) grouped[cam] = [];
+    for (const b of allBoundaries) (grouped[b.cameraName] ||= []).push(b);
+
+    const res = await boundariesApi.saveBoundaries(grouped);
+    if (res.isFallback) {
+      setBoundarySaveError(res.error);
+      showToast('Saved locally only — backend unreachable');
+      return;
+    }
+    setBoundarySaveError(null);
+    setIsBoundaryMock(false);
+    showToast('Boundaries written to the backend');
+  };
+
+  const handleSavePolicy = async () => {
+    const res = await zonePolicyApi.savePolicy(policyDraft);
+    if (res.isFallback || !res.data) {
+      showToast(`Could not save policy: ${res.error ?? 'backend unreachable'}`);
+      return;
+    }
+    setZonePolicy(res.data);
+    setIsPolicyModalOpen(false);
+    showToast('Zone severity policy updated');
+  };
+
   return (
     <div className="space-y-5">
       {/* Toast Feedback */}
@@ -353,7 +514,7 @@ export const ZonesPage: React.FC = () => {
       )}
 
       {/* Top Toolbar: Camera Selector & Global Zone Actions */}
-      <div className="card-3d flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-b from-[#0c0c14] to-[#06060a] border border-white/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)]">
+      <div className="card-3d flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-b from-bg-surface to-bg-primary border border-ink/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)]">
         {/* Camera Selector Tabs */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
           <span className="font-mono text-xs font-semibold text-text-dim uppercase tracking-wider shrink-0 mr-1">
@@ -373,7 +534,7 @@ export const ZonesPage: React.FC = () => {
                 className={`px-3.5 py-1.5 text-xs font-mono rounded-xl transition-all flex items-center gap-2 border shrink-0 ${
                   isSelected
                     ? 'bg-accent-teal/20 text-accent-teal border-accent-teal/50 font-bold shadow-[0_0_12px_rgba(0,240,255,0.25)]'
-                    : 'bg-black/60 text-text-dim border-white/10 hover:text-white hover:border-white/20'
+                    : 'bg-bg-elevated text-text-dim border-ink/10 hover:text-text-primary hover:border-ink/20'
                 }`}
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-accent-green shadow-[0_0_6px_#00ff88]" />
@@ -404,8 +565,8 @@ export const ZonesPage: React.FC = () => {
                   className="fixed inset-0 z-40"
                   onClick={() => setIsPresetMenuOpen(false)}
                 />
-                <div className="absolute right-0 mt-1.5 w-72 bg-[#080c14] border border-white/15 rounded-xl shadow-2xl p-2 z-50 space-y-1 font-mono text-xs backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
-                  <div className="px-2.5 py-1.5 text-[10px] text-text-muted uppercase font-bold border-b border-white/10 flex items-center justify-between">
+                <div className="absolute right-0 mt-1.5 w-72 bg-bg-primary border border-ink/15 rounded-xl shadow-2xl p-2 z-50 space-y-1 font-mono text-xs backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-2.5 py-1.5 text-[10px] text-text-muted uppercase font-bold border-b border-ink/10 flex items-center justify-between">
                     <span>1-Click Zone Presets</span>
                     <span className="text-accent-teal">AUTO-TIER</span>
                   </div>
@@ -413,10 +574,10 @@ export const ZonesPage: React.FC = () => {
                     <button
                       key={preset.id}
                       onClick={() => handleApplyPreset(preset, true)}
-                      className="w-full p-2.5 rounded-lg hover:bg-white/[0.06] text-left transition-colors flex flex-col gap-0.5 group"
+                      className="w-full p-2.5 rounded-lg hover:bg-ink/[0.06] text-left transition-colors flex flex-col gap-0.5 group"
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-white font-bold group-hover:text-accent-teal transition-colors">
+                        <span className="text-text-primary font-bold group-hover:text-accent-teal transition-colors">
                           {preset.name}
                         </span>
                         <span className="text-[9px] px-1.5 py-0.2 rounded bg-accent-teal/15 text-accent-teal font-semibold">
@@ -486,6 +647,7 @@ export const ZonesPage: React.FC = () => {
           <ZoneCanvas
             cameraName={selectedCamera}
             zones={cameraZones}
+            streamUrl={cameraStreamUrl(selectedCamera)}
             selectedZoneId={selectedZoneId}
             onSelectZone={setSelectedZoneId}
             onEditZone={handleOpenEditZone}
@@ -580,17 +742,36 @@ export const ZonesPage: React.FC = () => {
                       onClick={() =>
                         setSelectedZoneId(isSelected ? null : zone.id)
                       }
-                      className={`p-3.5 rounded-xl border bg-black/60 hover:bg-white/[0.04] transition-all cursor-pointer border-l-4 ${borderTierColor} shadow-md ${
+                      className={`p-3.5 rounded-xl border bg-bg-elevated hover:bg-ink/[0.04] transition-all cursor-pointer border-l-4 ${borderTierColor} shadow-md ${
                         isSelected
                           ? 'border-accent-teal/70 ring-2 ring-accent-teal/40 bg-accent-teal/10 shadow-[0_0_15px_rgba(0,240,255,0.15)]'
-                          : 'border-white/10'
-                      }`}
+                          : 'border-ink/10'
+                      } ${zone.enabled === false ? 'opacity-50' : ''}`}
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <Badge variant={zone.tier} size="sm">
-                          {zone.tier} TIER
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant={zone.tier} size="sm">
+                            {zone.role ? ZONE_ROLES.find((r) => r.value === zone.role)?.label ?? zone.tier : `${zone.tier} TIER`}
+                          </Badge>
+                          {zone.enabled === false && (
+                            <span className="text-[9px] font-mono text-text-muted uppercase">disabled</span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAllZones((prev) =>
+                                prev.map((z) => (z.id === zone.id ? { ...z, enabled: !(z.enabled ?? true) } : z))
+                              );
+                            }}
+                            title={zone.enabled === false ? 'Enable zone' : 'Disable zone'}
+                            className={`p-1 rounded-sm transition-colors ${
+                              zone.enabled === false ? 'text-text-muted hover:text-accent-green' : 'text-accent-green hover:text-accent-yellow'
+                            }`}
+                          >
+                            <Power className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -649,7 +830,7 @@ export const ZonesPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="p-3 bg-black/60 rounded-xl border border-white/10 space-y-2 font-mono text-[11px]">
+                  <div className="p-3 bg-bg-elevated rounded-xl border border-ink/10 space-y-2 font-mono text-[11px]">
                     <div className="flex items-center justify-between text-text-dim">
                       <span className="flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow" />
@@ -674,7 +855,7 @@ export const ZonesPage: React.FC = () => {
                   </div>
 
                   {/* 1-Click Zone Setup Options */}
-                  <div className="space-y-2 pt-1 border-t border-white/10">
+                  <div className="space-y-2 pt-1 border-t border-ink/10">
                     <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider block font-bold">
                       1-Click Zone Setup (Optional):
                     </span>
@@ -692,31 +873,31 @@ export const ZonesPage: React.FC = () => {
 
                       <button
                         onClick={() => handleApplyPreset(ZONE_PRESETS[1], true)}
-                        className="w-full px-3 py-2 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-text-dim hover:text-white border border-white/10 text-xs font-mono font-semibold flex items-center justify-between transition-all"
+                        className="w-full px-3 py-2 rounded-lg bg-ink/[0.05] hover:bg-ink/[0.1] text-text-dim hover:text-text-primary border border-ink/10 text-xs font-mono font-semibold flex items-center justify-between transition-all"
                       >
                         <span className="flex items-center gap-1.5">
                           <Layers className="w-3.5 h-3.5" />
                           Apply Gate Funnel
                         </span>
-                        <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded">4 Zones</span>
+                        <span className="text-[10px] bg-ink/10 px-1.5 py-0.5 rounded">4 Zones</span>
                       </button>
 
                       {otherCamerasWithZones.length > 0 && (
                         <button
                           onClick={() => handleCopyFromCamera(otherCamerasWithZones[0])}
-                          className="w-full px-3 py-2 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-text-dim hover:text-white border border-white/10 text-xs font-mono font-semibold flex items-center justify-between transition-all"
+                          className="w-full px-3 py-2 rounded-lg bg-ink/[0.05] hover:bg-ink/[0.1] text-text-dim hover:text-text-primary border border-ink/10 text-xs font-mono font-semibold flex items-center justify-between transition-all"
                         >
                           <span className="flex items-center gap-1.5">
                             <Copy className="w-3.5 h-3.5" />
                             Copy Zones from {otherCamerasWithZones[0].toUpperCase()}
                           </span>
-                          <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded">Mirror</span>
+                          <span className="text-[10px] bg-ink/10 px-1.5 py-0.5 rounded">Mirror</span>
                         </button>
                       )}
 
                       <button
                         onClick={() => setIsDrawing(true)}
-                        className="w-full px-3 py-2 rounded-lg bg-white/[0.03] hover:bg-white/[0.08] text-text-muted hover:text-text-primary border border-white/10 text-xs font-mono flex items-center justify-center gap-1.5 transition-all"
+                        className="w-full px-3 py-2 rounded-lg bg-ink/[0.03] hover:bg-ink/[0.08] text-text-muted hover:text-text-primary border border-ink/10 text-xs font-mono flex items-center justify-center gap-1.5 transition-all"
                       >
                         <Pencil className="w-3 h-3" />
                         <span>Draw Custom Polygon</span>
@@ -729,16 +910,134 @@ export const ZonesPage: React.FC = () => {
 
             {/* Bottom Quick Clone Action if camera has zones */}
             {cameraZones.length > 0 && (
-              <div className="pt-3 border-t border-white/10">
+              <div className="pt-3 border-t border-ink/10">
                 <button
                   onClick={handleOpenCloneModal}
-                  className="w-full py-2 px-3 rounded-lg bg-white/[0.04] hover:bg-accent-teal/15 text-text-dim hover:text-accent-teal border border-white/10 hover:border-accent-teal/30 transition-all font-mono text-xs flex items-center justify-center gap-1.5 font-semibold"
+                  className="w-full py-2 px-3 rounded-lg bg-ink/[0.04] hover:bg-accent-teal/15 text-text-dim hover:text-accent-teal border border-ink/10 hover:border-accent-teal/30 transition-all font-mono text-xs flex items-center justify-center gap-1.5 font-semibold"
                 >
                   <Copy className="w-3.5 h-3.5" />
                   <span>Clone {cameraZones.length} Zones to Other Cameras</span>
                 </button>
               </div>
             )}
+          </Card>
+        </div>
+      </div>
+
+      {/* Virtual Boundaries — a separate entity from zones (see
+          zones/boundary_engine.py): a boundary answers "did this track just
+          cross a line", not "which region is this in". Detected and shown
+          here; not yet fed into incidents. */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="lg:col-span-8 space-y-5">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+              <Milestone className="w-4 h-4 text-accent-teal" />
+              Virtual Boundaries — {selectedCamera.toUpperCase()}
+            </h2>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Save className="w-3.5 h-3.5" />}
+                onClick={handleSaveBoundariesProfile}
+              >
+                Save Boundaries
+              </Button>
+              <DataSourceBadge isMock={isBoundaryMock} error={boundarySaveError} />
+            </div>
+          </div>
+          <ZoneCanvas
+            mode="line"
+            cameraName={selectedCamera}
+            zones={[]}
+            streamUrl={cameraStreamUrl(selectedCamera)}
+            boundaries={cameraBoundaries}
+            selectedZoneId={null}
+            onSelectZone={() => {}}
+            onEditZone={() => {}}
+            onDeleteZone={() => {}}
+            selectedBoundaryId={selectedBoundaryId}
+            onSelectBoundary={setSelectedBoundaryId}
+            onEditBoundary={handleOpenEditBoundary}
+            onDeleteBoundary={handleDeleteBoundary}
+            isDrawing={isBoundaryDrawing}
+            onStartDrawing={() => setIsBoundaryDrawing(true)}
+            onCancelDrawing={() => setIsBoundaryDrawing(false)}
+            onFinishDrawing={handleFinishBoundaryDrawing}
+          />
+        </div>
+
+        <div className="lg:col-span-4 space-y-5">
+          <Card
+            title={
+              <div className="flex items-center justify-between w-full">
+                <span className="font-semibold text-sm">Configured Boundaries</span>
+                <Badge variant="teal" size="sm">{cameraBoundaries.length} ACTIVE</Badge>
+              </div>
+            }
+            subtitle={`Directional tripwires for ${selectedCamera.toUpperCase()} — detected and shown, not yet part of scoring`}
+            variant="default"
+          >
+            <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+              {cameraBoundaries.length > 0 ? (
+                cameraBoundaries.map((boundary) => {
+                  const isSelected = selectedBoundaryId === boundary.id;
+                  return (
+                    <div
+                      key={boundary.id}
+                      onClick={() => setSelectedBoundaryId(isSelected ? null : boundary.id)}
+                      className={`p-3 rounded-xl border bg-bg-elevated hover:bg-ink/[0.04] transition-all cursor-pointer ${
+                        isSelected ? 'border-accent-teal/70 ring-2 ring-accent-teal/40 bg-accent-teal/10' : 'border-ink/10'
+                      } ${!boundary.enabled ? 'opacity-50' : ''}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-xs text-text-primary">{boundary.label || 'Untitled boundary'}</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleBoundaryEnabled(boundary.id);
+                            }}
+                            title={boundary.enabled ? 'Disable boundary' : 'Enable boundary'}
+                            className={`p-1 rounded-sm transition-colors ${boundary.enabled ? 'text-accent-green hover:text-accent-yellow' : 'text-text-muted hover:text-accent-green'}`}
+                          >
+                            <Power className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenEditBoundary(boundary);
+                            }}
+                            title="Edit boundary"
+                            className="p-1 rounded-sm text-text-muted hover:text-accent-teal hover:bg-bg-surface transition-colors"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteBoundary(boundary.id);
+                            }}
+                            title="Delete boundary"
+                            className="p-1 rounded-sm text-text-muted hover:text-accent-red hover:bg-bg-surface transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <span className="font-mono text-[10px] text-text-dim">
+                        {boundary.enabled ? 'Enabled' : 'Disabled — kept, not evaluated'}
+                      </span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="p-4 text-center text-xs text-text-dim font-mono">
+                  No boundaries yet — draw a line to add one.
+                </div>
+              )}
+            </div>
           </Card>
         </div>
       </div>
@@ -780,74 +1079,64 @@ export const ZonesPage: React.FC = () => {
             </div>
           )}
 
-          {/* Tier Selection Radio Tiles */}
+          {/* Zone Role Selection — the real-world role an operator thinks in
+              terms of. Severity (formTier, used for coloring and saved
+              alongside) is resolved from this via the zone policy below. */}
           <div>
-            <label className="block text-xs font-mono uppercase text-text-dim mb-2">
-              Zone Priority Tier:
-            </label>
-            <div className="grid grid-cols-3 gap-2.5">
-              {/* Red Tier */}
-              <label
-                className={`flex flex-col p-3 rounded-sm border cursor-pointer transition-all ${
-                  formTier === 'red'
-                    ? 'bg-accent-red/15 border-accent-red ring-1 ring-accent-red'
-                    : 'bg-bg-elevated border-border-subtle hover:border-accent-red/40'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="tier"
-                  value="red"
-                  checked={formTier === 'red'}
-                  onChange={() => setFormTier('red')}
-                  className="sr-only"
-                />
-                <span className="w-2.5 h-2.5 rounded-full bg-accent-red mb-1" />
-                <span className="font-mono text-xs font-bold text-accent-red">RED</span>
-                <span className="text-[10px] text-text-dim">Critical Breach</span>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-mono uppercase text-text-dim">
+                Zone Role:
               </label>
-
-              {/* Yellow Tier */}
-              <label
-                className={`flex flex-col p-3 rounded-sm border cursor-pointer transition-all ${
-                  formTier === 'yellow'
-                    ? 'bg-accent-yellow/15 border-accent-yellow ring-1 ring-accent-yellow'
-                    : 'bg-bg-elevated border-border-subtle hover:border-accent-yellow/40'
-                }`}
+              <button
+                type="button"
+                onClick={() => {
+                  setPolicyDraft(zonePolicy);
+                  setIsPolicyModalOpen(true);
+                }}
+                className="flex items-center gap-1 text-[10px] font-mono text-text-muted hover:text-accent-teal transition-colors"
               >
-                <input
-                  type="radio"
-                  name="tier"
-                  value="yellow"
-                  checked={formTier === 'yellow'}
-                  onChange={() => setFormTier('yellow')}
-                  className="sr-only"
-                />
-                <span className="w-2.5 h-2.5 rounded-full bg-accent-yellow mb-1" />
-                <span className="font-mono text-xs font-bold text-accent-yellow">YELLOW</span>
-                <span className="text-[10px] text-text-dim">Direction Caution</span>
-              </label>
-
-              {/* Green Tier */}
-              <label
-                className={`flex flex-col p-3 rounded-sm border cursor-pointer transition-all ${
-                  formTier === 'green'
-                    ? 'bg-accent-green/15 border-accent-green ring-1 ring-accent-green'
-                    : 'bg-bg-elevated border-border-subtle hover:border-accent-green/40'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="tier"
-                  value="green"
-                  checked={formTier === 'green'}
-                  onChange={() => setFormTier('green')}
-                  className="sr-only"
-                />
-                <span className="w-2.5 h-2.5 rounded-full bg-accent-green mb-1" />
-                <span className="font-mono text-xs font-bold text-accent-green">GREEN</span>
-                <span className="text-[10px] text-text-dim">Normal / Curfew</span>
-              </label>
+                <Settings2 className="w-3 h-3" />
+                Edit severity policy
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              {ZONE_ROLES.map((role) => {
+                const resolvedTier = (zonePolicy[role.value] as 'red' | 'yellow' | 'green') ?? 'green';
+                // Static per-tier class strings — Tailwind's JIT scanner
+                // can't see classes built by string interpolation, so this
+                // can't be `bg-${tierColor}/15` etc.
+                const tierStyles = {
+                  red: { selected: 'bg-accent-red/15 border-accent-red ring-1 ring-accent-red', dot: 'bg-accent-red', text: 'text-accent-red' },
+                  yellow: { selected: 'bg-accent-yellow/15 border-accent-yellow ring-1 ring-accent-yellow', dot: 'bg-accent-yellow', text: 'text-accent-yellow' },
+                  green: { selected: 'bg-accent-green/15 border-accent-green ring-1 ring-accent-green', dot: 'bg-accent-green', text: 'text-accent-green' },
+                }[resolvedTier];
+                const isSelected = formRole === role.value;
+                return (
+                  <label
+                    key={role.value}
+                    className={`flex flex-col p-3 rounded-sm border cursor-pointer transition-all ${
+                      isSelected ? tierStyles.selected : 'bg-bg-elevated border-border-subtle hover:border-accent-teal/40'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="role"
+                      value={role.value}
+                      checked={isSelected}
+                      onChange={() => handleSelectRole(role.value)}
+                      className="sr-only"
+                    />
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={`w-2.5 h-2.5 rounded-full ${tierStyles.dot}`} />
+                      <span className="font-mono text-xs font-bold text-text-primary">{role.label}</span>
+                    </div>
+                    <span className="text-[10px] text-text-dim leading-snug">{role.description}</span>
+                    <span className={`text-[9px] font-mono font-semibold ${tierStyles.text} mt-1.5 uppercase`}>
+                      → {resolvedTier} severity
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           </div>
 
@@ -864,6 +1153,21 @@ export const ZonesPage: React.FC = () => {
               className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal"
             />
           </div>
+
+          {/* Enable/Disable — kept and saved either way, just not used for
+              classification while disabled (mirrors the boundary toggle). */}
+          <label className="flex items-center justify-between p-2.5 bg-bg-elevated border border-border-subtle rounded-sm cursor-pointer">
+            <span className="flex items-center gap-2 text-xs font-mono text-text-dim">
+              <Power className="w-3.5 h-3.5" />
+              Zone enabled
+            </span>
+            <input
+              type="checkbox"
+              checked={formEnabled}
+              onChange={(e) => setFormEnabled(e.target.checked)}
+              className="w-4 h-4 accent-accent-teal"
+            />
+          </label>
 
           {/* Direction Toggle (Active only for Yellow zones) */}
           {formTier === 'yellow' && (
@@ -1000,10 +1304,10 @@ export const ZonesPage: React.FC = () => {
         }
       >
         <div className="space-y-4 font-mono text-xs">
-          <div className="p-3 bg-white/[0.03] border border-white/10 rounded-xl space-y-1">
+          <div className="p-3 bg-ink/[0.03] border border-ink/10 rounded-xl space-y-1">
             <span className="text-text-muted text-[10px] block uppercase">Source Camera</span>
             <div className="flex items-center justify-between">
-              <span className="text-white font-bold">{selectedCamera.toUpperCase()}</span>
+              <span className="text-text-primary font-bold">{selectedCamera.toUpperCase()}</span>
               <Badge variant="teal" size="sm">
                 {cameraZones.length} ZONES
               </Badge>
@@ -1044,8 +1348,8 @@ export const ZonesPage: React.FC = () => {
                       key={cam}
                       className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer transition-all ${
                         isChecked
-                          ? 'bg-accent-teal/15 border-accent-teal text-white'
-                          : 'bg-black/50 border-white/10 text-text-dim hover:border-white/20'
+                          ? 'bg-accent-teal/15 border-accent-teal text-text-primary'
+                          : 'bg-bg-elevated border-ink/10 text-text-dim hover:border-ink/20'
                       }`}
                     >
                       <div className="flex items-center gap-2">
@@ -1072,7 +1376,7 @@ export const ZonesPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="pt-2 border-t border-white/10">
+          <div className="pt-2 border-t border-ink/10">
             <label className="flex items-center gap-2 cursor-pointer text-[11px] text-text-dim">
               <input
                 type="checkbox"
@@ -1086,6 +1390,105 @@ export const ZonesPage: React.FC = () => {
               If checked, replaces target cameras' zones with source zones. If unchecked, appends to them.
             </p>
           </div>
+        </div>
+      </Modal>
+
+      {/* BOUNDARY CONFIGURATION MODAL (FOR NEW OR EDIT) */}
+      <Modal
+        isOpen={isBoundaryFormOpen}
+        onClose={() => {
+          setIsBoundaryFormOpen(false);
+          setBoundaryInProgressPoints([]);
+          setEditingBoundary(null);
+        }}
+        title={editingBoundary ? 'Edit Boundary' : 'Configure New Boundary'}
+        description={`Label and enable this tripwire on ${selectedCamera.toUpperCase()}`}
+        size="sm"
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setIsBoundaryFormOpen(false);
+                setBoundaryInProgressPoints([]);
+                setEditingBoundary(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="primary" size="sm" onClick={handleSaveBoundaryForm}>
+              {editingBoundary ? 'Save Changes' : 'Confirm & Create Boundary'}
+            </Button>
+          </>
+        }
+      >
+        <form onSubmit={handleSaveBoundaryForm} className="space-y-4">
+          <div>
+            <label className="block text-xs font-mono uppercase text-text-dim mb-1">
+              Boundary Label <span className="text-accent-red">*</span>
+            </label>
+            <input
+              type="text"
+              value={boundaryFormLabel}
+              onChange={(e) => setBoundaryFormLabel(e.target.value)}
+              placeholder="e.g. North Fence Line"
+              className="w-full px-3 py-2 bg-bg-elevated border border-border-subtle rounded-sm text-sm text-text-primary focus:outline-none focus:border-accent-teal"
+            />
+          </div>
+          <label className="flex items-center justify-between p-2.5 bg-bg-elevated border border-border-subtle rounded-sm cursor-pointer">
+            <span className="flex items-center gap-2 text-xs font-mono text-text-dim">
+              <Power className="w-3.5 h-3.5" />
+              Boundary enabled
+            </span>
+            <input
+              type="checkbox"
+              checked={boundaryFormEnabled}
+              onChange={(e) => setBoundaryFormEnabled(e.target.checked)}
+              className="w-4 h-4 accent-accent-teal"
+            />
+          </label>
+        </form>
+      </Modal>
+
+      {/* ZONE SEVERITY POLICY MODAL — the configurable role -> tier mapping.
+          Editing this changes how NEWLY SAVED zones resolve their severity;
+          it never touches zone_engine.py/threat_score.py directly. */}
+      <Modal
+        isOpen={isPolicyModalOpen}
+        onClose={() => setIsPolicyModalOpen(false)}
+        title="Zone Severity Policy"
+        description="Which severity tier each zone role resolves to when scored"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setIsPolicyModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" size="sm" onClick={handleSavePolicy}>
+              Save Policy
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          {ZONE_ROLES.map((role) => (
+            <div key={role.value} className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-mono font-bold text-text-primary">{role.label}</div>
+                <div className="text-[10px] text-text-dim">{role.description}</div>
+              </div>
+              <select
+                value={policyDraft[role.value] ?? zonePolicy[role.value] ?? 'green'}
+                onChange={(e) => setPolicyDraft((prev) => ({ ...prev, [role.value]: e.target.value }))}
+                className="px-2.5 py-1.5 bg-bg-elevated border border-border-subtle rounded-sm text-xs font-mono text-text-primary focus:outline-none focus:border-accent-teal shrink-0"
+              >
+                <option value="red">Red</option>
+                <option value="yellow">Yellow</option>
+                <option value="green">Green</option>
+              </select>
+            </div>
+          ))}
         </div>
       </Modal>
     </div>

@@ -26,17 +26,19 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ref
   ) => {
     const baseStyles =
-      'inline-flex items-center justify-center font-medium transition-colors duration-100 rounded-xl focus:outline-none focus:ring-1 focus:ring-white/20 disabled:opacity-40 disabled:cursor-not-allowed select-none relative overflow-hidden';
+      'inline-flex items-center justify-center font-medium transition-colors duration-100 rounded-xl focus:outline-none focus:ring-1 focus:ring-ink/20 disabled:opacity-40 disabled:cursor-not-allowed select-none relative overflow-hidden';
 
     const variants = {
       primary:
+        // .btn-3d-primary is a solid brand-teal fill in both themes, so its
+        // text stays fixed white rather than following text-primary.
         'btn-3d-primary text-white font-semibold',
       secondary:
-        'btn-3d-secondary text-text-primary hover:border-white/20',
+        'btn-3d-secondary text-text-primary hover:border-ink/20',
       ghost:
-        'bg-transparent text-text-dim hover:text-white hover:bg-white/[0.04] border border-transparent',
+        'bg-transparent text-text-dim hover:text-text-primary hover:bg-ink/[0.04] border border-transparent',
       danger:
-        'bg-accent-red text-white font-semibold hover:bg-accent-red/90 border border-white/10',
+        'bg-accent-red text-white font-semibold hover:bg-accent-red/90 border border-ink/10',
     };
 
 

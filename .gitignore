@@ -20,8 +20,13 @@ config/cameras.json
 config/dashboard_settings.json
 .env.bak-*
 
-# Pipeline -> dashboard live frames and health (integration/runtime_state.py)
-runtime/
+# Pipeline -> dashboard live frames and health (integration/runtime_state.py).
+# Scoped to the actual generated paths, not the whole runtime/ package --
+# a blanket `runtime/` here previously hid runtime/startup_check.py (real
+# source app.py imports) from every commit, breaking fresh clones.
+runtime/live/
+runtime/e2e/
+runtime/pipeline_health.json
 
 # Model weight bundle for sharing with teammates (see README "Model weights"
 # section) - regenerate with `zip -r models.zip models/`, don't commit it.
@@ -29,3 +34,6 @@ models.zip
 
 # scripts/accuracy_eval.py output - real photos of whoever ran the capture.
 eval_runs/
+
+# Videos uploaded via the dashboard's Offline Video Analysis feature.
+uploads/

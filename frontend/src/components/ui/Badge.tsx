@@ -29,7 +29,7 @@ export const Badge: React.FC<BadgeProps> = ({
     red:
       'bg-accent-red/10 text-accent-red border-accent-red/35',
     neutral:
-      'bg-[#0f1422] text-text-dim border-white/10',
+      'bg-bg-elevated text-text-dim border-ink/10',
     teal:
       'bg-accent-teal/10 text-accent-teal border-accent-teal/30',
     purple:

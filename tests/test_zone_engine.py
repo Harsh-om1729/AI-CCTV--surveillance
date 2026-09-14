@@ -28,6 +28,24 @@ class TestZoneEngine(unittest.TestCase):
         result = engine.classify((50, 50))
         self.assertEqual(result["tier"], "red")
 
+    def test_disabled_zone_is_ignored_by_classify(self):
+        """Kept (saved) and round-tripped, just not used for classification
+        — the operator's toggle actually does something, not just paints a
+        different color in the dashboard."""
+        disabled_red = Zone("red", [(0, 0), (100, 0), (100, 100), (0, 100)], enabled=False)
+        engine = self._engine([disabled_red])
+        result = engine.classify((50, 50))
+        self.assertEqual(result["tier"], "none")
+
+    def test_disabled_zone_persists_and_reloads_as_disabled(self):
+        tmp_dir = tempfile.mkdtemp()
+        path = str(Path(tmp_dir) / "zones.json")
+        engine = ZoneEngine(config_path=path)
+        engine.add_zone(Zone("red", [(0, 0), (10, 0), (10, 10)], enabled=False))
+
+        reloaded = ZoneEngine(config_path=path)
+        self.assertFalse(reloaded.zones[0].enabled)
+
     def test_point_outside_all_zones_returns_none(self):
         engine = self._engine([RED_ZONE])
         result = engine.classify((500, 500))
@@ -38,6 +56,25 @@ class TestZoneEngine(unittest.TestCase):
         engine = self._engine([overlapping_yellow, RED_ZONE])
         result = engine.classify((50, 50))
         self.assertEqual(result["tier"], "red")
+
+    def test_overlapping_same_tier_zones_favor_the_smaller_one(self):
+        """Explicit priority/specificity, not polygon load order: a small
+        zone sitting inside a larger zone of the same tier must win
+        regardless of which one was added to the engine first."""
+        large = Zone("red", [(0, 0), (200, 0), (200, 200), (0, 200)])
+        small = Zone("red", [(80, 80), (120, 80), (120, 120), (80, 120)])
+        self.assertAlmostEqual(large.area(), 40000.0)
+        self.assertAlmostEqual(small.area(), 1600.0)
+
+        self.assertIs(ZoneEngine._select_most_specific([large, small]), small)
+        self.assertIs(ZoneEngine._select_most_specific([small, large]), small)
+
+    def test_higher_tier_still_wins_over_a_smaller_lower_tier_zone(self):
+        """Priority is checked before specificity: a tiny red zone must beat
+        a huge green zone it sits inside, not the other way round."""
+        tiny_red = Zone("red", [(90, 90), (110, 90), (110, 110), (90, 110)])
+        huge_green = Zone("green", [(0, 0), (500, 0), (500, 500), (0, 500)])
+        self.assertIs(ZoneEngine._select_most_specific([huge_green, tiny_red]), tiny_red)
 
     def test_yellow_zone_direction_inward_toward_red(self):
         engine = self._engine([RED_ZONE, YELLOW_ZONE])
@@ -99,6 +136,19 @@ class TestFixedTierZoneEngine(unittest.TestCase):
         engine = self._engine("yellow")
         self.assertEqual(engine.zones, [])
         self.assertEqual(engine.classify((50, 50))["tier"], "yellow")
+
+    def test_fixed_tier_wins_over_leftover_drawn_polygons(self):
+        """The real bug this fixes: a camera pinned via CAMERA_ZONE_TIERS with
+        an old config/zones_<camera>.json still sitting on disk (from before
+        it was pinned, or from a camera that used to have zones drawn) must
+        report its fixed tier everywhere in frame - not whatever leftover
+        polygon a point happens to land in. Without a drawing UI left to
+        clear that file, silently deferring to it made the fixed tier
+        unfixable."""
+        engine = self._engine("red")
+        engine.add_zone(Zone("green", [(0, 0), (100, 0), (100, 100), (0, 100)]))
+        self.assertEqual(engine.classify((50, 50))["tier"], "red")
+        self.assertEqual(engine.classify((9999, 9999))["tier"], "red")
 
     def test_direction_inward_when_descending_toward_camera(self):
         engine = self._engine("red")

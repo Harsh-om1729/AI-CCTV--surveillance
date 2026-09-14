@@ -31,6 +31,7 @@ os.environ.setdefault(
 )
 
 import cv2  # noqa: E402
+import numpy as np  # noqa: E402
 
 from activity_gate.gate import ActivityGate
 from alerts.alert_manager import AlertManager
@@ -55,6 +56,7 @@ from config.settings import (
     DETECTION_MODEL_PATH,
     HARDWARE_PROFILE,
     IDLE_MIN_FPS,
+    MAX_TIER_HOLD_SECONDS,
     MOTION_THRESHOLD,
     REID_FACE_CHECK_INTERVAL,
     REID_MATCH_MARGIN,
@@ -85,6 +87,7 @@ from reid.embedder import OSNetEmbedder
 from reid.reid import PersonGallery
 from runtime.startup_check import StartupValidator
 from tracking.tracker import Tracker
+from zones.boundary_engine import BoundaryEngine
 from zones.drawer import ZoneDrawer
 from zones.zone_engine import ZoneEngine
 from demo.demo_engine import get_demo_engine
@@ -147,6 +150,18 @@ def draw_fps_overlay(frame, fps: float):
 
 TIER_COLORS = {"green": (0, 200, 0), "yellow": (0, 220, 220), "red": (0, 0, 255)}
 
+# The movement thresholds in threat_rules.py (walk_max, fast_speed, ...) are
+# tuned in raw pixels/FRAME, which implicitly assumes a roughly-constant
+# capture rate close to this value (matching kinematic_score.py's own
+# nominal_fps default). px/frame for the SAME real-world speed scales
+# inversely with fps: drop the pipeline to ~8fps (e.g. two cameras sharing
+# one CPU-bound sequential loop) and an ordinary walker's per-frame
+# displacement roughly triples, tripping the "running" band on nothing more
+# than an ordinary walk. Rescaling to this nominal rate before scoring keeps
+# the thresholds meaning the same real-world speed regardless of how fast or
+# slow the camera is actually being sampled this moment.
+NOMINAL_KINEMATICS_FPS = 20.0
+
 
 def zone_group_count(detections: list) -> int:
     """How many people are inside a zone in this frame.
@@ -160,11 +175,28 @@ def zone_group_count(detections: list) -> int:
     )
 
 
-def draw_threat_score_overlay(frame, det, scorer: ThreatScorer, dwell_seconds: float, group_count: int):
+def draw_threat_score_overlay(
+    frame, det, scorer: ThreatScorer, dwell_seconds: float, group_count: int,
+    alert_slot: int = 0, fps: "float | None" = None,
+):
+    # Normalize px/frame to what it would be at NOMINAL_KINEMATICS_FPS, so a
+    # slow-sampled camera doesn't read an ordinary walk as a sprint (see
+    # NOMINAL_KINEMATICS_FPS above). A cold/implausible fps reading falls
+    # back to the nominal rate itself (i.e. no rescaling) rather than
+    # dividing by a near-zero number.
+    effective_fps = fps if (fps and fps > 1.0) else NOMINAL_KINEMATICS_FPS
+    # px/frame * fps = px/second (the true, fps-independent speed); dividing
+    # that back by the nominal fps re-expresses it as "px/frame if this had
+    # been captured at the nominal rate" — the quantity the thresholds are
+    # actually calibrated against. Lower effective_fps means each captured
+    # frame spans more real time, so the SAME true speed reads as a smaller
+    # normalized value here, not a larger one.
+    normalized_speed = det.speed * (effective_fps / NOMINAL_KINEMATICS_FPS)
+
     score = scorer.score(
         zone_tier=det.zone_tier,
         hour=datetime.now().hour,
-        speed_px_per_frame=det.speed,
+        speed_px_per_frame=normalized_speed,
         category=det.category(),
         zone_direction=det.zone_direction,
         dwell_seconds=dwell_seconds,
@@ -196,7 +228,74 @@ def draw_threat_score_overlay(frame, det, scorer: ThreatScorer, dwell_seconds: f
             frame, banner, (x1, y2 + 32),
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1,
         )
+
+    # A running person is the clearest anomaly on the feed - see
+    # ThreatScorer._running_override. Give it a visual treatment a sentry
+    # can't miss at a glance rather than just another line of text: a heavy
+    # dark outline around them and a zoomed-in inset in a frame corner.
+    if score.override_reason is not None and "running" in score.override_reason:
+        _draw_running_high_alert(frame, det.box, alert_slot)
+
     return score
+
+
+# Deliberately dark/heavy and visually distinct from the ordinary green/red/
+# yellow category and zone boxes, so a running person reads as "different"
+# at a glance instead of blending into the usual overlay clutter.
+RUNNING_ALERT_BORDER_COLOR = (12, 12, 12)  # near-black
+RUNNING_ALERT_TEXT_COLOR = (0, 0, 255)     # red, for contrast against the dark border
+RUNNING_ALERT_PAD = 12
+RUNNING_ALERT_THICKNESS = 7
+RUNNING_ALERT_ZOOM_SIZE = 220  # px, square inset in the frame corner
+
+
+def _draw_running_high_alert(frame, box, slot: int = 0) -> None:
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = box
+
+    # Padded, heavy dark border around the person - bigger and darker than
+    # the ordinary per-category box.
+    bx1, by1 = max(0, x1 - RUNNING_ALERT_PAD), max(0, y1 - RUNNING_ALERT_PAD)
+    bx2, by2 = min(w - 1, x2 + RUNNING_ALERT_PAD), min(h - 1, y2 + RUNNING_ALERT_PAD)
+    if bx2 <= bx1 or by2 <= by1:
+        return
+    cv2.rectangle(frame, (bx1, by1), (bx2, by2), RUNNING_ALERT_BORDER_COLOR, RUNNING_ALERT_THICKNESS)
+    banner_y = by1 - 14 if by1 - 14 > 18 else by2 + 46
+    cv2.putText(
+        frame, "HIGH ALERT: RUNNING", (bx1, banner_y),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.7, RUNNING_ALERT_TEXT_COLOR, 2,
+    )
+
+    # Zoomed inset of the person, pasted top-right (stacked downward per
+    # slot when more than one person is running in the same frame) - an
+    # operator watching the wide shot sees the runner up close without
+    # switching views. Aspect ratio is preserved and letterboxed onto a
+    # dark square rather than stretched, so the crop still looks like them.
+    crop = frame[by1:by2, bx1:bx2]
+    if crop.size == 0:
+        return
+    crop_h, crop_w = crop.shape[:2]
+    scale = RUNNING_ALERT_ZOOM_SIZE / max(crop_h, crop_w)
+    resized = cv2.resize(
+        crop, (max(1, int(crop_w * scale)), max(1, int(crop_h * scale))),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    inset = np.full((RUNNING_ALERT_ZOOM_SIZE, RUNNING_ALERT_ZOOM_SIZE, 3), RUNNING_ALERT_BORDER_COLOR, dtype=frame.dtype)
+    rh, rw = resized.shape[:2]
+    off_y, off_x = (RUNNING_ALERT_ZOOM_SIZE - rh) // 2, (RUNNING_ALERT_ZOOM_SIZE - rw) // 2
+    inset[off_y:off_y + rh, off_x:off_x + rw] = resized
+
+    ix1 = w - RUNNING_ALERT_ZOOM_SIZE - 10
+    iy1 = 10 + slot * (RUNNING_ALERT_ZOOM_SIZE + 34)
+    ix2, iy2 = ix1 + RUNNING_ALERT_ZOOM_SIZE, iy1 + RUNNING_ALERT_ZOOM_SIZE
+    if ix1 < 0 or iy2 > h:
+        return  # frame too small, or too many stacked insets - skip rather than corrupt the frame
+    frame[iy1:iy2, ix1:ix2] = inset
+    cv2.rectangle(frame, (ix1, iy1), (ix2, iy2), RUNNING_ALERT_BORDER_COLOR, RUNNING_ALERT_THICKNESS)
+    cv2.putText(
+        frame, "HIGH ALERT", (ix1, iy2 + 20),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.6, RUNNING_ALERT_TEXT_COLOR, 2,
+    )
 
 
 def main() -> None:
@@ -252,7 +351,12 @@ def main() -> None:
     zone_drawers = {
         name: ZoneDrawer(window_names[name], zone_engines[name]) for name in CAMERA_SOURCES
     }
-
+    # Boundaries are display-only here (see camera_state["boundaryEvents"]
+    # below) - detected independently of zone entry, never fed into scoring.
+    boundary_engines = {
+        name: BoundaryEngine(config_path=f"config/boundaries_{name}.json")
+        for name in CAMERA_SOURCES
+    }
 
     loiter_trackers = {name: LoiterTracker() for name in CAMERA_SOURCES}
 
@@ -296,6 +400,11 @@ def main() -> None:
     frame_buffers = {name: deque(maxlen=3) for name in CAMERA_SOURCES}
     last_frame_time = {name: None for name in CAMERA_SOURCES}
     fps_ema = {name: 0.0 for name in CAMERA_SOURCES}
+    # Displayed max-tier hold: (tier, expires_at) per camera. See
+    # MAX_TIER_HOLD_SECONDS - this is the dashboard's live status, separate
+    # from AlertManager's own (already debounced) incident-recording tier.
+    tier_hold: dict[str, tuple[str, float]] = {}
+    TIER_RANK = {None: -1, "green": 0, "yellow": 1, "red": 2}
     # Per-camera caches so a throttled (skipped) frame still shows the last
     # known identity/watchlist result instead of blanking it out.
     person_id_cache = {name: {} for name in CAMERA_SOURCES}
@@ -364,6 +473,10 @@ def main() -> None:
             detections = trackers[name].track(processed)
         with profiler.stage("false_alarm_filter"):
             detections = false_alarm_filters[name].filter(detections)
+        # Reset once per frame (not accumulated across frames) so this
+        # reflects what's crossing right now, not an ever-growing log -
+        # camera_state is republished every frame regardless.
+        camera_state[name]["boundaryEvents"] = []
         for det in detections:
             if det.track_id is not None and det.category() == "person":
                 track_id = det.track_id
@@ -406,10 +519,19 @@ def main() -> None:
             det.zone_tier = zone_result["tier"]
             det.zone_direction = zone_result["direction"]
 
+            # Boundary crossings are a separate signal from zone entry above:
+            # detected and surfaced for the dashboard only, not fed into
+            # scores/detections/incidents (see zones/boundary_engine.py).
+            with profiler.stage("boundary_check"):
+                crossings = boundary_engines[name].check_crossing(det.track_id, ground_point)
+            if crossings:
+                camera_state[name]["boundaryEvents"].extend(crossings)
+
         draw_detections(processed, detections)
 
         group_count = zone_group_count(detections)
         scores = []
+        running_alert_slot = 0
         for det in detections:
             # Dwell is keyed on the Re-ID person_id where we have one,
             # so standing still behind cover — which makes ByteTrack
@@ -419,11 +541,15 @@ def main() -> None:
                 else ("track", det.track_id)
             )
             dwell = loiter_trackers[name].update(dwell_key, det.zone_tier)
-            scores.append(
-                draw_threat_score_overlay(
-                    processed, det, threat_scorer, dwell, group_count
-                )
+            score = draw_threat_score_overlay(
+                processed, det, threat_scorer, dwell, group_count,
+                alert_slot=running_alert_slot, fps=fps_ema[name],
             )
+            if score.override_reason is not None and "running" in score.override_reason:
+                # Next runner in this frame (if any) gets its own zoom inset
+                # stacked below this one instead of drawing on top of it.
+                running_alert_slot += 1
+            scores.append(score)
 
         with profiler.stage("draw_overlays"):
             draw_debug_overlay(processed, preprocessor, active, motion_score)
@@ -434,14 +560,27 @@ def main() -> None:
         with profiler.stage("publish_live"):
             publisher.publish_frame(name, processed)
         tiers = [s.tier for s in scores]
+        raw_tier = "red" if "red" in tiers else "yellow" if "yellow" in tiers else "green" if tiers else None
+
+        # Hold the displayed tier at its highest recent value for
+        # MAX_TIER_HOLD_SECONDS instead of reporting the raw per-frame value,
+        # which flickers yellow/red for a single frame at a time whenever a
+        # score sits near a tier boundary. Rising immediately, decaying slowly.
+        now_ts = time.time()
+        held_tier, held_until = tier_hold.get(name, (None, 0.0))
+        if TIER_RANK[raw_tier] >= TIER_RANK[held_tier] or now_ts >= held_until:
+            tier_hold[name] = (raw_tier, now_ts + MAX_TIER_HOLD_SECONDS)
+            displayed_tier = raw_tier
+        else:
+            displayed_tier = held_tier
+
         camera_state[name].update(
             lastFrameAt=time.time(),
             fps=round(fps_ema[name], 1),
             detections=len(detections),
             persons=sum(1 for d in detections if d.category() == "person"),
             vehicles=sum(1 for d in detections if d.category() == "vehicle"),
-            maxTier=("red" if "red" in tiers else "yellow" if "yellow" in tiers
-                     else "green" if tiers else None),
+            maxTier=displayed_tier,
             lowLightBoost=bool(preprocessor.last_boost_applied),
             brightness=round(float(preprocessor.last_brightness), 1),
         )
@@ -496,8 +635,6 @@ def main() -> None:
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
-            for drawer in zone_drawers.values():
-                drawer.handle_key(key)
 
     finally:
         report = profiler.report()
