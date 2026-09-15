@@ -94,3 +94,24 @@ class FaceRecognizer:
         fx1, fy1, fx2, fy2 = face.bbox.astype(int)
         face_box = (x1 + fx1, y1 + fy1, x1 + fx2, y1 + fy2)
         return face_box, face.normed_embedding
+
+    def embed_portrait(self, frame):
+        """Returns the embedding of the largest face in a standalone portrait
+        photo (a watchlist enrollment upload), or None if no face is found.
+
+        Unlike embed(), this runs the detector on the *whole* frame rather
+        than just its top half. embed()'s head/shoulder crop assumes a
+        full-body detection box, where the face is reliably near the top —
+        true for a person YOLO just detected, false for an arbitrary
+        enrollment photo. A normal portrait with any headroom above the
+        subject (i.e. almost any real photo) puts the face at or below the
+        50% line, so reusing embed() here made enrollment reject perfectly
+        good photos with "No face found".
+        """
+        if not self.available:
+            return None
+        faces = self._app.get(frame)
+        if not faces:
+            return None
+        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        return face.normed_embedding

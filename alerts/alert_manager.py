@@ -78,6 +78,7 @@ class AlertManager:
         max_cooldown_seconds: float = 64.0,
         state_ttl_seconds: float = 300.0,
         dispatcher=None,
+        watchlist_db=None,
     ):
         if confirm_seconds < 0:
             raise ValueError(f"confirm_seconds ({confirm_seconds}) cannot be negative")
@@ -98,6 +99,7 @@ class AlertManager:
         # changes. Left None (the default) everything runs inline exactly as
         # before, which is what the unit tests rely on.
         self.dispatcher = dispatcher
+        self.watchlist_db = watchlist_db
         os.makedirs(snapshot_dir, exist_ok=True)
         # Per-track alert state is keyed by an identity that churns (ByteTrack
         # mints a new id on every re-acquisition), so keeping it forever means
@@ -424,6 +426,13 @@ class AlertManager:
             self.incident_store.record(
                 det, score, frames[-1], crop_frame=crop, burst_frames=frames[:-1] or None
             )
+            # One bump per recorded incident, not per face-check frame — see
+            # WatchlistDB.record_match. incident_store.record() already
+            # persisted this same match onto the row, so this is what makes
+            # a subject's match_count/last_matched_at (and the dashboard's
+            # sighting history) reflect real detections.
+            if self.watchlist_db is not None and getattr(det, "watchlist_match", None):
+                self.watchlist_db.record_match(det.watchlist_match)
         else:
             track_key = det.person_id if det.person_id is not None else det.track_id
             self._save_snapshot(frames, score.tier, det, track_key)

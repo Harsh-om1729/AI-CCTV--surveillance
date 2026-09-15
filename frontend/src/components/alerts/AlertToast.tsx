@@ -132,30 +132,24 @@ export const AlertToastContainer: React.FC = () => {
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-primary font-semibold text-[11px] tracking-tight">
-                    {getCategoryLabel(toast.category)}
-                  </span>
-                  <span
-                    className={`font-mono text-[11px] font-bold ${
-                      isRed ? 'text-accent-red' : 'text-accent-yellow'
-                    }`}
-                  >
-                    SCORE: {toast.score.toFixed(1)}
-                  </span>
-                </div>
+                <span className="text-text-primary font-semibold text-[11px] tracking-tight">
+                  {getCategoryLabel(toast.category)}
+                </span>
 
-                <div className="text-[10px] text-text-dim mt-0.5 flex items-center justify-between font-mono">
+                {/* Why this fired, in plain language — an operator (or a
+                    judge watching over their shoulder) should be able to
+                    tell what's wrong without reading a score breakdown. */}
+                <p className="text-[11px] text-text-primary/90 mt-1 leading-snug line-clamp-2">
+                  {toast.whatHeIsDoing ||
+                    `${getCategoryLabel(toast.category)} in the ${
+                      toast.zoneTier && toast.zoneTier !== 'none' ? toast.zoneTier.toUpperCase() : toast.tier.toUpperCase()
+                    } zone.`}
+                </p>
+
+                <div className="text-[10px] text-text-dim mt-1 flex items-center justify-between font-mono">
                   <span>Sector Zone: {toast.zoneTier || toast.tier}</span>
                   <span className="text-accent-teal">#{toast.reidGalleryId}</span>
                 </div>
-
-                {/* S/T/K/C Threat Formula breakdown */}
-                {toast.breakdown && (
-                  <div className="mt-1 font-mono text-[9px] text-text-muted">
-                    S:{toast.breakdown.sectorRisk} T:{toast.breakdown.timeRisk} K:{toast.breakdown.kinematicsRisk} C:{toast.breakdown.classConfidence}
-                  </div>
-                )}
               </div>
             </div>
 

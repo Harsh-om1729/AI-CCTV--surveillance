@@ -211,11 +211,16 @@ export const AlertBell: React.FC = () => {
                         </span>
                       </div>
 
-                      {/* Threat S/T/K/C formula breakdown */}
+                      {/* Threat formula breakdown — full, not just S/T/K/C (see
+                          AlertToast.tsx for why: D/L/G alone can separate two
+                          same-zone, same-S/T/K/C alerts into different tiers). */}
                       {alert.breakdown && (
                         <div className="text-[10px] font-mono text-text-muted mt-0.5 flex items-center justify-between">
                           <span>
                             S:{alert.breakdown.sectorRisk} T:{alert.breakdown.timeRisk} K:{alert.breakdown.kinematicsRisk} C:{alert.breakdown.classConfidence}
+                            {!!alert.breakdown.directionRisk && ` D:${alert.breakdown.directionRisk}`}
+                            {!!alert.breakdown.loiterRisk && ` L:${alert.breakdown.loiterRisk}`}
+                            {!!alert.breakdown.groupRisk && ` G:${alert.breakdown.groupRisk}`}
                           </span>
                           <span className="text-accent-teal font-semibold">#{alert.reidGalleryId}</span>
                         </div>

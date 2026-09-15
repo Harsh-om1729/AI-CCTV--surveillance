@@ -141,7 +141,7 @@ app.add_middleware(
     allow_origins=IBVAP_CORS_ORIGINS,
     allow_origin_regex=_CORS_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -340,6 +340,7 @@ def _serialise(row: dict) -> dict:
             if isinstance(burst, list) else []
         ),
         "watchlistMatch": row.get("watchlist_match"),
+        "watchlistSimilarity": row.get("watchlist_similarity"),
         "breakdown": bd,
         "reidGalleryId": f"PG-{person_id}" if person_id is not None else "",
         "encryption": {
@@ -506,6 +507,20 @@ def require_token_query(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing token.")
 
 
+_SAFE_CAMERA_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _check_camera_id(cam_id: str) -> str:
+    """Reject camera ids that would escape config/ when interpolated into a
+    file path (e.g. "../../etc/passwd"). Mirrors runtime_state._SAFE_NAME."""
+    if not _SAFE_CAMERA_ID.match(cam_id or ""):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid camera id {cam_id!r}: only letters, digits, '_' and '-' are allowed.",
+        )
+    return cam_id
+
+
 def _zones_path(camera_id: str) -> str:
     p1 = f"config/zones/{camera_id}.json"
     if os.path.exists(p1):
@@ -595,7 +610,7 @@ def v1_cameras(_: None = Depends(require_token)) -> list:
                 tier = "green"
         tier = tier.lower()
         zone_profile = f"{tier.upper()} PRIORITY"
-        is_active = status_["health"] in ("online", "idle") or str(source).lower() in ("simulated", "demo", "mock")
+        is_active = status_["health"] == "online" or str(source).lower() in ("simulated", "demo", "mock")
 
         out.append(
             {
@@ -629,6 +644,7 @@ def v1_add_camera(camera: dict = Body(...), _: None = Depends(require_token)) ->
     cam_id = str(camera.get("id") or "").strip().lower().replace(" ", "_")
     if not cam_id:
         cam_id = f"cam_{len(overlay) + 1}"
+    _check_camera_id(cam_id)
 
     raw = camera.get("source") or camera.get("streamUrl") or "simulated"
     source = normalize_source(raw)
@@ -656,7 +672,16 @@ def v1_update_camera(camera_id: str, updates: dict = Body(...), _: None = Depend
     from camera.source import normalize_source
     overlay = _load_camera_overlay()
     if camera_id not in overlay:
-        overlay[camera_id] = {"id": camera_id, "name": camera_id.upper(), "source": "simulated", "zoneTier": "yellow"}
+        _check_camera_id(camera_id)
+        # A camera already defined in .env (CAMERA_SOURCES) has a real
+        # source — editing its name/zone/location here must not silently
+        # switch it to a fake feed just because it had no overlay entry yet.
+        overlay[camera_id] = {
+            "id": camera_id,
+            "name": camera_id.upper(),
+            "source": CAMERA_SOURCES.get(camera_id, "simulated"),
+            "zoneTier": "yellow",
+        }
 
     if "zoneTier" in updates:
         tier = str(updates["zoneTier"]).lower()
@@ -678,18 +703,48 @@ def v1_update_camera(camera_id: str, updates: dict = Body(...), _: None = Depend
     return overlay[camera_id]
 
 
+def _remove_from_env(camera_id: str) -> None:
+    from pathlib import Path
+    
+    env_file = Path(".env")
+    if not env_file.exists():
+        return
+        
+    lines = env_file.read_text().splitlines()
+    new_lines = []
+    for line in lines:
+        if line.strip().startswith("CAMERA_SOURCES="):
+            raw = line.split("=", 1)[1].strip().strip('"').strip("'")
+            sources = []
+            for pair in raw.split(","):
+                if not pair.strip():
+                    continue
+                name = pair.partition("=")[0].strip()
+                if name != camera_id:
+                    sources.append(pair.strip())
+            new_lines.append(f"CAMERA_SOURCES={','.join(sources)}")
+        else:
+            new_lines.append(line)
+            
+    env_file.write_text("\n".join(new_lines) + "\n")
+
+
 @v1.delete("/cameras/{camera_id}")
 def v1_delete_camera(camera_id: str, _: None = Depends(require_token)) -> dict:
+    was_in_env = False
     if camera_id in CAMERA_SOURCES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Camera {camera_id!r} is defined in .env (CAMERA_SOURCES) and cannot be deleted via the API.",
-        )
+        CAMERA_SOURCES.pop(camera_id, None)
+        _remove_from_env(camera_id)
+        was_in_env = True
+
     overlay = _load_camera_overlay()
-    if camera_id not in overlay:
+    if camera_id not in overlay and not was_in_env:
         raise HTTPException(status_code=404, detail=f"No camera {camera_id!r}.")
-    overlay.pop(camera_id)
-    _save_camera_overlay(overlay)
+        
+    if camera_id in overlay:
+        overlay.pop(camera_id)
+        _save_camera_overlay(overlay)
+        
     registry.force_stop(camera_id)
     return {"success": True, "id": camera_id}
 
@@ -993,7 +1048,10 @@ async def v1_upload_video(
                 written += len(chunk)
                 if written > _MAX_UPLOAD_BYTES:
                     raise HTTPException(status_code=413, detail="Video exceeds the 1 GiB upload limit.")
-                f.write(chunk)
+                # Blocking disk I/O offloaded to a thread so a large upload
+                # doesn't stall the event loop (and every other concurrent
+                # request: /ws/alerts, MJPEG streams, other API calls).
+                await asyncio.to_thread(f.write, chunk)
     except Exception:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -1280,9 +1338,8 @@ def v1_watchlist(_: None = Depends(require_token)) -> list:
             "name": name,
             "notes": meta.get(pid, {}).get("notes", ""),
             # The dashboard renders a generated SVG portrait when this is
-            # empty. The real reference photo is not retained — only its
-            # 512-float embedding is, which cannot be turned back into a face.
-            "photoUrl": "",
+            # empty (e.g. a legacy row enrolled before photos were kept).
+            "photoUrl": f"/watchlist/{pid}/photo" if meta.get(pid, {}).get("has_photo") else "",
             "addedAt": meta.get(pid, {}).get("added_at", 0),
             "lastMatchedAt": meta.get(pid, {}).get("last_matched_at"),
             "matchCount": meta.get(pid, {}).get("match_count", 0),
@@ -1307,7 +1364,7 @@ def _watchlist_meta(db) -> dict:
             db._conn.execute(f"ALTER TABLE watchlist ADD COLUMN {col} {ddl}")
     db._conn.commit()
     cur = db._conn.execute(
-        "SELECT id, notes, added_at, last_matched_at, match_count FROM watchlist"
+        "SELECT id, notes, added_at, last_matched_at, match_count, photo_path FROM watchlist"
     )
     return {
         r[0]: {
@@ -1315,6 +1372,7 @@ def _watchlist_meta(db) -> dict:
             "added_at": r[2] or 0,
             "last_matched_at": r[3],
             "match_count": r[4] or 0,
+            "has_photo": bool(r[5]),
         }
         for r in cur.fetchall()
     }
@@ -1342,9 +1400,11 @@ def v1_enroll(person: dict = Body(...), _: None = Depends(require_token)) -> dic
     """Enrol a face from an uploaded photo.
 
     Mirrors scripts/add_to_watchlist.py: decode the image, take the largest
-    face InsightFace finds, store its 512-float embedding. The photo itself is
-    never written to disk — the embedding is not reversible into a face, which
-    keeps an enrolled person's image out of the system entirely.
+    face InsightFace finds anywhere in the frame (embed_portrait, not embed —
+    this is a standalone photo, not a full-body detection crop), store its
+    512-float embedding. The photo itself is also kept (encrypted, via
+    WatchlistDB.save_photo) so the Watchlist page and a live-feed match
+    banner can show the actual enrolled reference photo.
 
     A name alone cannot be enrolled: with no embedding there is nothing for a
     live face to be compared against, so the row would sit in the watchlist
@@ -1377,8 +1437,7 @@ def v1_enroll(person: dict = Body(...), _: None = Depends(require_token)) -> dic
     if frame is None:
         raise HTTPException(status_code=422, detail="Image could not be decoded.")
 
-    h, w = frame.shape[:2]
-    _, embedding = _get_recognizer().embed(frame, (0, 0, w, h))
+    embedding = _get_recognizer().embed_portrait(frame)
     if embedding is None:
         raise HTTPException(
             status_code=422,
@@ -1396,6 +1455,12 @@ def v1_enroll(person: dict = Body(...), _: None = Depends(require_token)) -> dic
             (str(person.get("notes", "")), time.time(), person_id),
         )
         db._conn.commit()
+        # The operator's own enrollment photo — shown back on the Watchlist
+        # page and on a live-feed match banner so a hit is visually
+        # confirmable against who was actually enrolled, not just a name.
+        ok, jpeg = cv2.imencode(".jpg", frame)
+        if ok:
+            db.save_photo(person_id, jpeg.tobytes())
     finally:
         db.close()
 
@@ -1404,7 +1469,7 @@ def v1_enroll(person: dict = Body(...), _: None = Depends(require_token)) -> dic
         "id": person_id,
         "name": name,
         "notes": person.get("notes", ""),
-        "photoUrl": "",
+        "photoUrl": f"/watchlist/{person_id}/photo",
         "addedAt": int(time.time()),
         "lastMatchedAt": None,
         "matchCount": 0,
@@ -1417,13 +1482,31 @@ def v1_delete_person(person_id: int, _: None = Depends(require_token)) -> dict:
 
     db = WatchlistDB()
     try:
-        cur = db._conn.execute("DELETE FROM watchlist WHERE id = ?", (person_id,))
-        db._conn.commit()
-        if cur.rowcount == 0:
+        cur = db._conn.execute("SELECT id FROM watchlist WHERE id = ?", (person_id,))
+        if cur.fetchone() is None:
             raise HTTPException(status_code=404, detail=f"No watchlist entry {person_id}.")
+        db.delete_person(person_id)  # also removes the stored enrollment photo
     finally:
         db.close()
     return {"success": True, "id": person_id}
+
+
+@v1.get("/watchlist/{person_id}/photo")
+def v1_watchlist_photo(person_id: int, _: None = Depends(require_token_query)):
+    """The operator's own enrollment photo, encrypted at rest — see
+    WatchlistDB.save_photo. require_token_query (not require_token) because
+    this is loaded from a plain <img src>, same reasoning as the camera
+    stream and incident evidence routes."""
+    from face.watchlist import WatchlistDB
+
+    db = WatchlistDB()
+    try:
+        jpeg = db.get_photo_bytes(person_id)
+    finally:
+        db.close()
+    if jpeg is None:
+        raise HTTPException(status_code=404, detail=f"No photo for watchlist entry {person_id}.")
+    return Response(content=jpeg, media_type="image/jpeg")
 
 
 # --------------------------------------------------------------------------
@@ -1881,15 +1964,21 @@ class _AlertHub:
         self._clients: set = set()
         self._task = None
         self._last_id = None
+        self._start_lock = asyncio.Lock()
 
     async def register(self, ws) -> None:
         self._clients.add(ws)
         if self._task is None:
-            # Start from the newest existing row so a freshly opened dashboard
-            # does not get every historical incident replayed at it as if
-            # thousands of alerts had just fired.
-            self._last_id = await asyncio.to_thread(self._max_id)
-            self._task = asyncio.create_task(self._run())
+            # Two clients connecting close together can both observe
+            # self._task is None before either awaits below; serialize
+            # start-up through a lock so only one poll task is ever created.
+            async with self._start_lock:
+                if self._task is None:
+                    # Start from the newest existing row so a freshly opened
+                    # dashboard does not get every historical incident
+                    # replayed at it as if thousands of alerts had just fired.
+                    self._last_id = await asyncio.to_thread(self._max_id)
+                    self._task = asyncio.create_task(self._run())
 
     async def unregister(self, ws) -> None:
         self._clients.discard(ws)

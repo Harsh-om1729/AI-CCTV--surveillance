@@ -140,6 +140,14 @@ class IncidentStore:
             "breakdown": "TEXT",
             "threat_level": "TEXT",
             "event_type": "TEXT",
+            # Set by face.watchlist.WatchlistMatcher via app.py's det.watchlist_match.
+            # Without these two columns a genuine face match never reached
+            # incidents.db: the pipeline computed it, threat_score.py used it
+            # to escalate the tier, but record() below had nowhere to put it,
+            # so the dashboard's watchlist sighting history and match counts
+            # stayed empty even for subjects the pipeline was matching.
+            "watchlist_match": "TEXT",
+            "watchlist_similarity": "REAL",
         }
         for column, definition in new_columns.items():
             if column not in existing:
@@ -193,8 +201,9 @@ class IncidentStore:
                 """
                 INSERT INTO incidents
                     (track_id, person_id, category, zone_tier, score, tier, timestamp,
-                     snapshot_path, crop_path, burst_paths, camera_name, breakdown, threat_level, event_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     snapshot_path, crop_path, burst_paths, camera_name, breakdown, threat_level, event_type,
+                     watchlist_match, watchlist_similarity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     det.track_id, det.person_id, det.category(), det.zone_tier,
@@ -206,6 +215,8 @@ class IncidentStore:
                     json.dumps(_score_breakdown(score)),
                     threat_level,
                     event_type,
+                    getattr(det, "watchlist_match", None),
+                    getattr(det, "watchlist_similarity", None),
                 ),
             )
             self._conn.commit()
@@ -241,7 +252,8 @@ class IncidentStore:
         cur = self._conn.execute(
             "SELECT id, track_id, person_id, category, zone_tier, score, tier, timestamp, "
             "snapshot_path, crop_path, burst_paths, status, acknowledged_by, acknowledged_at, "
-            "resolved_by, resolved_at, resolution_reason, camera_name, breakdown "
+            "resolved_by, resolved_at, resolution_reason, camera_name, breakdown, "
+            "watchlist_match, watchlist_similarity "
             "FROM incidents ORDER BY id DESC LIMIT ?",
             (limit,),
         )
@@ -252,7 +264,8 @@ class IncidentStore:
         cur = self._conn.execute(
             "SELECT id, track_id, person_id, category, zone_tier, score, tier, timestamp, "
             "snapshot_path, crop_path, burst_paths, status, acknowledged_by, acknowledged_at, "
-            "resolved_by, resolved_at, resolution_reason, camera_name, breakdown "
+            "resolved_by, resolved_at, resolution_reason, camera_name, breakdown, "
+            "watchlist_match, watchlist_similarity "
             "FROM incidents WHERE id = ?",
             (incident_id,),
         )

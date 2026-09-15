@@ -73,10 +73,14 @@ def zone_group_count(detections: list) -> int:
     """How many people are inside a zone in this frame. Mirrors app.py's
     helper of the same name — group risk is a property of the frame, not of
     one detection, so a lone walker and one of five people at the line must
-    not read as the same score."""
+    not read as the same score.
+
+    Skips a detection on its track's first frame (`direction is None`), so a
+    one-frame false positive doesn't briefly inflate the count."""
     return sum(
         1 for d in detections
         if d.category() == "person" and d.zone_tier and d.zone_tier != "none"
+        and d.direction is not None
     )
 
 st.set_page_config(page_title="IBVAP Dashboard", layout="wide")

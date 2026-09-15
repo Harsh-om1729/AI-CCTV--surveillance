@@ -31,6 +31,7 @@ export interface Incident {
   cropUrl: string | null;
   burstUrls: string[];
   watchlistMatch: string | null; // matched person's name if any, else null
+  watchlistSimilarity?: number | null; // cosine similarity (0-1) of that match
   breakdown: ThreatScoreBreakdown;
   reidGalleryId: string;        // Person Gallery Re-ID track continuity (e.g. "PG-101")
   encryption: {

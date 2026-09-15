@@ -12,7 +12,7 @@ export const Badge: React.FC<BadgeProps> = ({
   className,
   variant = 'neutral',
   dot = false,
-  pulse: _pulse = false,
+  pulse = false,
   size = 'md',
   children,
   ...props
@@ -57,9 +57,17 @@ export const Badge: React.FC<BadgeProps> = ({
     >
       {dot && (
         <span className="relative flex h-1.5 w-1.5">
+          {pulse && (
+            <span
+              className={cn(
+                'absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping',
+                dotColors[variant]
+              )}
+            />
+          )}
           <span
             className={cn(
-              'inline-flex rounded-full h-1.5 w-1.5',
+              'relative inline-flex rounded-full h-1.5 w-1.5',
               dotColors[variant]
             )}
           />

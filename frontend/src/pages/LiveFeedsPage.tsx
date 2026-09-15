@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiCamera, camerasApi, cameraStreamUrl } from '@/lib/api';
+import { ApiCamera, apiAssetUrl, camerasApi, cameraStreamUrl, watchlistApi } from '@/lib/api';
 import { describeCamera, useSystemHealth } from '@/components/system/SystemHealthProvider';
+import { useAlerts } from '@/components/alerts/AlertProvider';
+import { useBackendData } from '@/lib/useBackendData';
+import { WatchlistPerson } from '@/lib/mockWatchlist';
 import { CameraTile } from '@/components/live';
 import { AddCameraModal } from '@/components/cameras';
 import { Button } from '@/components/ui/Button';
@@ -26,6 +29,11 @@ export interface CameraItem extends Omit<ApiCamera, 'activityGate' | 'lowLightBo
 
 const LEGACY_CAMERAS_STORAGE_KEY = 'ibvap_cameras_data_v3';
 
+// How long a watchlist hit stays pinned to its camera tile. Long enough to
+// notice and act on, short enough that the badge doesn't keep claiming
+// someone is on-screen long after they've walked out of frame.
+const WATCHLIST_BADGE_SECONDS = 45;
+
 
 export const LiveFeedsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -43,6 +51,51 @@ export const LiveFeedsPage: React.FC = () => {
     [apiCameras]
   );
   const serverNow = health?.checkedAt ?? null;
+
+  // Real-time watchlist hits, from the same WebSocket feed the alert bell
+  // uses — each incident already carries watchlistMatch/watchlistSimilarity
+  // once the pipeline actually matches a face. Keyed by camera so each tile
+  // can show its own most recent hit.
+  const { alerts } = useAlerts();
+  // The enrolled reference photo for each watchlist subject — so a match
+  // banner can show the actual photo the operator enrolled, not just a
+  // name, matching it against the watchlist itself rather than only the
+  // incident's evidence crop.
+  const { data: watchlistPeople } = useBackendData<WatchlistPerson[]>(() => watchlistApi.getWatchlist(), []);
+  const photoUrlByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of watchlistPeople) {
+      const url = apiAssetUrl(p.photoUrl);
+      if (url) map.set(p.name.trim().toLowerCase(), url);
+    }
+    return map;
+  }, [watchlistPeople]);
+
+  // Ticks independently of new alerts so a badge actually expires after
+  // WATCHLIST_BADGE_SECONDS instead of only re-evaluating on the next match.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const watchlistByCamera = useMemo(() => {
+    const map = new Map<string, { name: string; similarity: number; timestamp: number; photoUrl?: string }>();
+    const nowSeconds = nowTick / 1000;
+    for (const a of alerts) {
+      if (!a.watchlistMatch || nowSeconds - a.timestamp > WATCHLIST_BADGE_SECONDS) continue;
+      const existing = map.get(a.cameraName);
+      if (!existing || a.timestamp > existing.timestamp) {
+        map.set(a.cameraName, {
+          name: a.watchlistMatch,
+          similarity: a.watchlistSimilarity ?? 0,
+          timestamp: a.timestamp,
+          photoUrl: photoUrlByName.get(a.watchlistMatch.trim().toLowerCase()),
+        });
+      }
+    }
+    return map;
+  }, [alerts, nowTick, photoUrlByName]);
+
   const [viewMode, setViewMode] = useState<'grid' | 'focus'>('grid');
   const [gridColumns, setGridColumns] = useState<'2' | '3'>('2');
   const [focusedCameraId, setFocusedCameraId] = useState<string>('cam0');
@@ -322,6 +375,7 @@ export const LiveFeedsPage: React.FC = () => {
                 resolution={camera.resolution}
                 lastFrameAt={camera.lastFrameAt}
                 serverNow={serverNow}
+                watchlistMatch={watchlistByCamera.get(camera.id) ?? null}
                 onToggleFocus={() => handleTileClick(camera.id)}
                 onRemove={() => handleRemoveCamera(camera.id)}
                 onStop={() => handleStopCamera(camera.id)}
@@ -380,6 +434,7 @@ export const LiveFeedsPage: React.FC = () => {
               resolution={focusedCamera.resolution}
               lastFrameAt={focusedCamera.lastFrameAt}
               serverNow={serverNow}
+              watchlistMatch={watchlistByCamera.get(focusedCamera.id) ?? null}
               isFocused={true}
               onToggleFocus={() => setViewMode('grid')}
               onRemove={() => handleRemoveCamera(focusedCamera.id)}

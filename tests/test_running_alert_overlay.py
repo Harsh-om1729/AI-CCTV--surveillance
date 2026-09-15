@@ -42,6 +42,10 @@ class TestRunningHighAlertOverlay(unittest.TestCase):
         return scorer.rules.get_movement_config()["fast_speed_px_per_frame"]
 
     def test_running_person_gets_a_dark_border_and_zoom_inset(self):
+        # draw_threat_score_overlay only scores + draws the ordinary label
+        # now; the running zoom-inset is a separate, explicit draw decided by
+        # is_running_alert()/should_show_running_alert() in the main loop
+        # (see the hold-behaviour tests below) - drive it the same way here.
         scorer = self._scorer()
         frame = self._frame()
         det = _FakeDet(box=(50, 50, 120, 250), speed=self._fast_speed(scorer) + 5)
@@ -51,6 +55,8 @@ class TestRunningHighAlertOverlay(unittest.TestCase):
         self.assertIsNotNone(score.override_reason)
         self.assertIn("running", score.override_reason)
         self.assertEqual(score.tier, "red")
+        self.assertTrue(app_module.is_running_alert(score))
+        app_module._draw_running_high_alert(frame, det.box, slot=0)
 
         # The zoom inset (top-right corner) must no longer be blank.
         h, w = frame.shape[:2]
@@ -75,6 +81,7 @@ class TestRunningHighAlertOverlay(unittest.TestCase):
         score = app_module.draw_threat_score_overlay(frame, det, scorer, dwell_seconds=0.0, group_count=1)
 
         self.assertIsNone(score.override_reason)
+        self.assertFalse(app_module.is_running_alert(score))
         h, w = frame.shape[:2]
         corner = frame[10:10 + 20, w - 30:w - 10]
         self.assertFalse((corner != 0).any(), "a non-running person must not get the zoom inset")
@@ -131,8 +138,10 @@ class TestRunningHighAlertOverlay(unittest.TestCase):
         det_a = _FakeDet(box=(20, 20, 60, 100), speed=fast)
         det_b = _FakeDet(box=(200, 20, 240, 100), speed=fast)
 
-        app_module.draw_threat_score_overlay(frame, det_a, scorer, dwell_seconds=0.0, group_count=1, alert_slot=0)
-        app_module.draw_threat_score_overlay(frame, det_b, scorer, dwell_seconds=0.0, group_count=1, alert_slot=1)
+        app_module.draw_threat_score_overlay(frame, det_a, scorer, dwell_seconds=0.0, group_count=1)
+        app_module.draw_threat_score_overlay(frame, det_b, scorer, dwell_seconds=0.0, group_count=1)
+        app_module._draw_running_high_alert(frame, det_a.box, slot=0)
+        app_module._draw_running_high_alert(frame, det_b.box, slot=1)
 
         # Slot 1's inset must land below slot 0's, not on top of it.
         slot0_top = 10
@@ -141,6 +150,53 @@ class TestRunningHighAlertOverlay(unittest.TestCase):
         if slot1_top + 10 < h:
             self.assertTrue((frame[slot1_top:slot1_top + 10, w - 30:w - 10] != 0).any())
         self.assertTrue((frame[slot0_top:slot0_top + 10, w - 30:w - 10] != 0).any())
+
+
+class TestRunningAlertHold(unittest.TestCase):
+    """The actual feature request this covers: a running person's zoom inset
+    must stay on screen for RUNNING_ALERT_HOLD_SECONDS after they were last
+    seen running, not vanish the instant a single frame reads them as slower
+    - see should_show_running_alert in app.py."""
+
+    def test_stays_visible_after_running_stops_within_hold_window(self):
+        hold = {}
+        key = ("person", 1)
+        self.assertTrue(app_module.should_show_running_alert(hold, key, running_now=True, now=100.0))
+        # Not running anymore this frame, but well inside the hold window.
+        self.assertTrue(app_module.should_show_running_alert(hold, key, running_now=False, now=102.0))
+        self.assertTrue(
+            app_module.should_show_running_alert(
+                hold, key, running_now=False, now=100.0 + app_module.RUNNING_ALERT_HOLD_SECONDS
+            )
+        )
+
+    def test_disappears_once_the_hold_window_expires(self):
+        hold = {}
+        key = ("person", 1)
+        app_module.should_show_running_alert(hold, key, running_now=True, now=100.0)
+        past_hold = 100.0 + app_module.RUNNING_ALERT_HOLD_SECONDS + 0.01
+        self.assertFalse(app_module.should_show_running_alert(hold, key, running_now=False, now=past_hold))
+        # And the expired key is pruned, not left growing the dict forever.
+        self.assertNotIn(key, hold)
+
+    def test_running_again_resets_the_hold_window(self):
+        hold = {}
+        key = ("person", 1)
+        app_module.should_show_running_alert(hold, key, running_now=True, now=100.0)
+        app_module.should_show_running_alert(hold, key, running_now=True, now=104.0)
+        # 5s after the *first* running frame would have expired, but only
+        # ~1s after the second - still within the hold window.
+        self.assertTrue(
+            app_module.should_show_running_alert(
+                hold, key, running_now=False, now=104.0 + app_module.RUNNING_ALERT_HOLD_SECONDS - 0.5
+            )
+        )
+
+    def test_different_tracks_hold_independently(self):
+        hold = {}
+        app_module.should_show_running_alert(hold, ("person", 1), running_now=True, now=100.0)
+        # A different track that was never running gets no hold at all.
+        self.assertFalse(app_module.should_show_running_alert(hold, ("person", 2), running_now=False, now=100.0))
 
 
 if __name__ == "__main__":

@@ -304,8 +304,7 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({
             ))}
           </div>
           <p className="text-[10px] text-text-muted mt-1">
-            RED = restricted border line, YELLOW = approach strip, GREEN = own territory. Only matters if this
-            camera has no drawn zones — see the Zones page.
+            RED = restricted border line, YELLOW = approach strip, GREEN = own territory.
           </p>
         </div>
       </form>

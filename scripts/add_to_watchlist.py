@@ -28,8 +28,7 @@ def main() -> None:
     print("Loading face recognizer (first run downloads model weights)...")
     recognizer = FaceRecognizer()
 
-    h, w = frame.shape[:2]
-    face_box, embedding = recognizer.embed(frame, (0, 0, w, h))
+    embedding = recognizer.embed_portrait(frame)
     if embedding is None:
         print("No face detected in that image — try a clearer, more frontal photo.")
         sys.exit(1)
@@ -37,7 +36,7 @@ def main() -> None:
     watchlist = WatchlistDB()
     watchlist.add_person(name, embedding)
     watchlist.close()
-    print(f"Added '{name}' to the watchlist (face box: {face_box}).")
+    print(f"Added '{name}' to the watchlist.")
 
 
 if __name__ == "__main__":

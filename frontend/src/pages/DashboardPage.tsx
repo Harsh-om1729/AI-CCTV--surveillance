@@ -1,11 +1,12 @@
 import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Incident } from '@/lib/mockIncidents';
-import { apiAssetUrl, cameraStreamUrl, incidentsApi } from '@/lib/api';
+import { WatchlistPerson } from '@/lib/mockWatchlist';
+import { apiAssetUrl, cameraStreamUrl, incidentsApi, watchlistApi } from '@/lib/api';
 import { useBackendData } from '@/lib/useBackendData';
 import { threatStatusLabel, threatStatusVariant } from '@/lib/threatStatus';
+import { cn } from '@/lib/utils';
 
-import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { EvidenceImage } from '@/components/ui/EvidenceImage';
 import { useAlerts } from '@/components/alerts/AlertProvider';
 import { useSystemHealth } from '@/components/system/SystemHealthProvider';
@@ -26,11 +27,8 @@ import {
   User,
   Radio,
   Camera,
-  ScanEye,
   GitBranch,
-  Footprints,
   Database,
-  Play,
   MapPin,
   ChevronRight,
   Cpu,
@@ -38,19 +36,14 @@ import {
   HardDrive,
   Server,
   CheckCircle2,
+  GripVertical,
+  GripHorizontal,
 } from 'lucide-react';
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 
-// The system in one glance, in the order data actually flows. Each chip
-// links to the page that goes deeper on that stage — this is what lets a
-// judge who has never seen IBVAP before understand it in five seconds.
-const PIPELINE_STAGES = [
-  { label: 'Camera Input', icon: Camera, to: '/live' },
-  { label: 'AI Detection', icon: ScanEye, to: '/analysis' },
-  { label: 'Tracking', icon: GitBranch, to: '/analysis' },
-  { label: 'Behaviour Analysis', icon: Footprints, to: '/analysis' },
-  { label: 'Alert', icon: ShieldAlert, to: '/alerts' },
-  { label: 'Evidence / Log', icon: Database, to: '/alerts' },
-] as const;
+// How long a watchlist hit stays pinned to its camera tile — see
+// LiveFeedsPage.tsx, which uses the same window.
+const WATCHLIST_BADGE_SECONDS = 45;
 
 const tierTextClass = (tier: 'green' | 'yellow' | 'red') =>
   tier === 'red' ? 'text-accent-red' : tier === 'yellow' ? 'text-accent-yellow' : 'text-accent-green';
@@ -71,15 +64,19 @@ const KpiCard: React.FC<{
     red: { border: 'border-t-accent-red', icon: 'text-accent-red', value: 'text-accent-red' },
   }[tone];
   return (
-    <Card variant="default" className={`border-t-2 ${toneCls.border} ${tone === 'red' ? 'bg-accent-red/[0.04]' : ''}`}>
+    <Card
+      variant="default"
+      className={`border-t-2 ${toneCls.border} ${tone === 'red' ? 'bg-accent-red/[0.04]' : ''}`}
+      bodyClassName="p-3"
+    >
       <div className="flex items-start justify-between">
-        <div className="space-y-1">
-          <span className="text-xs font-semibold text-text-dim uppercase tracking-wider block">{label}</span>
-          <span className={`text-3xl font-bold tracking-tight block ${toneCls.value}`}>{value}</span>
-          <span className="text-[11px] text-text-muted font-medium">{sublabel}</span>
+        <div className="space-y-0.5">
+          <span className="text-[11px] font-semibold text-text-dim uppercase tracking-wider block">{label}</span>
+          <span className={`text-xl font-bold tracking-tight block ${toneCls.value}`}>{value}</span>
+          <span className="text-[10px] text-text-muted font-medium">{sublabel}</span>
         </div>
-        <div className={`w-10 h-10 rounded-xl bg-bg-elevated border border-ink/10 flex items-center justify-center shrink-0 ${toneCls.icon}`}>
-          <Icon className="w-5 h-5" />
+        <div className={`w-7 h-7 rounded-lg bg-bg-elevated border border-ink/10 flex items-center justify-center shrink-0 ${toneCls.icon}`}>
+          <Icon className="w-3.5 h-3.5" />
         </div>
       </div>
     </Card>
@@ -125,10 +122,17 @@ const StatusRow: React.FC<{
 );
 
 export const DashboardPage: React.FC = () => {
+  const [isDesktop, setIsDesktop] = React.useState(typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
+  React.useEffect(() => {
+    const handleResize = () => setIsDesktop(window.innerWidth >= 1280);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const navigate = useNavigate();
   const { alerts, backendStatus } = useAlerts();
   const { health, cameras, reachable } = useSystemHealth();
-  const { data: stored, isMock, error } = useBackendData<Incident[]>(() => incidentsApi.getIncidents(), []);
+  const { data: stored, isMock } = useBackendData<Incident[]>(() => incidentsApi.getIncidents(), []);
 
   // WebSocket alerts are already rows in the database, so key by id instead
   // of stacking them on top of the fetch.
@@ -154,7 +158,59 @@ export const DashboardPage: React.FC = () => {
   const gridCameras = camerasWithStream.slice(0, 6);
   const extraCameraCount = camerasWithStream.length - gridCameras.length;
 
+  // Same real-time watchlist-hit lookup as the Live Feeds page — see
+  // WATCHLIST_BADGE_SECONDS there for why this expires rather than sticking
+  // forever once a match fires. The enrolled reference photo comes from the
+  // Watchlist section itself, not the incident's evidence crop.
+  const { data: watchlistPeople } = useBackendData<WatchlistPerson[]>(() => watchlistApi.getWatchlist(), []);
+  const photoUrlByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of watchlistPeople) {
+      const url = apiAssetUrl(p.photoUrl);
+      if (url) map.set(p.name.trim().toLowerCase(), url);
+    }
+    return map;
+  }, [watchlistPeople]);
+
+  const [nowTick, setNowTick] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const watchlistByCamera = useMemo(() => {
+    const map = new Map<string, { name: string; similarity: number; timestamp: number; photoUrl?: string }>();
+    const nowSeconds = nowTick / 1000;
+    for (const a of activeAlerts) {
+      if (!a.watchlistMatch || nowSeconds - a.timestamp > WATCHLIST_BADGE_SECONDS) continue;
+      const existing = map.get(a.cameraName);
+      if (!existing || a.timestamp > existing.timestamp) {
+        map.set(a.cameraName, {
+          name: a.watchlistMatch,
+          similarity: a.watchlistSimilarity ?? 0,
+          timestamp: a.timestamp,
+          photoUrl: photoUrlByName.get(a.watchlistMatch.trim().toLowerCase()),
+        });
+      }
+    }
+    return map;
+  }, [activeAlerts, nowTick, photoUrlByName]);
+
   const latestAlert = activeAlerts[0];
+
+  // Which camera is enlarged on the right. Defaults to whichever camera the
+  // newest alert came from — an operator shouldn't have to go find it — but
+  // clicking any thumbnail overrides that until the next new alert arrives.
+  const [selectedCameraId, setSelectedCameraId] = React.useState<string | null>(null);
+  const lastAutoSelectedAlertId = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!latestAlert || lastAutoSelectedAlertId.current === latestAlert.id) return;
+    lastAutoSelectedAlertId.current = latestAlert.id;
+    setSelectedCameraId(latestAlert.cameraName);
+  }, [latestAlert]);
+  const selectedCamera =
+    camerasWithStream.find((c) => c.id === selectedCameraId) ??
+    camerasWithStream.find((c) => c.id === latestAlert?.cameraName) ??
+    camerasWithStream[0];
   const alertReasons: string[] = useMemo(() => {
     if (!latestAlert) return [];
     const recorded = latestAlert.breakdown?.threatReasons;
@@ -185,47 +241,6 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      {/* Header + "how it works" strip — orients a first-time viewer before
-          any numbers are shown. */}
-      <div className="bg-bg-surface border border-border-subtle rounded-2xl p-4 shadow-lg space-y-4">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-bold tracking-tight text-text-primary flex items-center gap-2">
-              <span>IBVAP — Border Video Analytics Overview</span>
-              <DataSourceBadge isMock={isMock} error={error} />
-            </h1>
-            <p className="text-xs text-text-dim mt-0.5">
-              Camera → AI Detection → Tracking → Behaviour Analysis → Alert → Evidence, running end to end.
-            </p>
-          </div>
-          <Button variant="secondary" size="sm" leftIcon={<Play className="w-3.5 h-3.5" />} onClick={() => navigate('/demo')}>
-            Guided Demo
-          </Button>
-        </div>
-
-        <div className="flex items-center overflow-x-auto pb-0.5">
-          {PIPELINE_STAGES.map((stage, i) => {
-            const Icon = stage.icon;
-            return (
-              <React.Fragment key={stage.label}>
-                <button
-                  onClick={() => navigate(stage.to)}
-                  className="flex flex-col items-center gap-1 shrink-0 px-2 group min-w-[86px]"
-                >
-                  <div className="w-9 h-9 rounded-full border border-ink/15 bg-ink/[0.03] flex items-center justify-center text-accent-teal group-hover:border-accent-teal/50 group-hover:bg-accent-teal/10 transition-colors">
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <span className="text-[10px] text-text-dim group-hover:text-text-primary text-center leading-tight">
-                    {stage.label}
-                  </span>
-                </button>
-                {i < PIPELINE_STAGES.length - 1 && <div className="h-px flex-1 min-w-[10px] bg-ink/10" />}
-              </React.Fragment>
-            );
-          })}
-        </div>
-      </div>
-
       {/* System status conditions an operator must know before trusting the numbers */}
       {(reachable === false || isMock) && (
         <div role="alert" className="p-3 rounded-xl border border-accent-red/40 bg-accent-red/10 text-xs font-mono text-accent-red">
@@ -276,57 +291,136 @@ export const DashboardPage: React.FC = () => {
         <KpiCard label="Critical" icon={Siren} tone="red" value={criticalCams} sublabel="Immediate action" />
       </div>
 
-      {/* Live Camera Feeds */}
-      <Card
-        title={
-          <div className="flex items-center gap-2">
-            <Video className="w-4 h-4 text-accent-teal" />
-            <span>Live Camera Feeds</span>
-          </div>
-        }
-        subtitle={`${liveCams}/${cameras.length} online — click a feed to open it`}
-        action={
-          <Button variant="ghost" size="sm" className="text-xs" rightIcon={<ArrowRight className="w-3.5 h-3.5" />} onClick={() => navigate('/live')}>
-            View All
-          </Button>
-        }
-      >
-        {gridCameras.length === 0 ? (
-          <div className="p-8 text-center text-xs text-text-dim font-mono">
-            {reachable === false ? 'Backend offline — camera status unknown.' : 'No cameras configured. Set CAMERA_SOURCES in .env or use Camera Management.'}
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {gridCameras.map((cam) => (
-                <div key={cam.id} onClick={() => navigate(`/live?camera=${cam.id}`)} className="cursor-pointer">
-                  <CameraTile
-                    cameraName={cam.name}
-                    streamUrl={cam.streamUrl}
-                    fps={cam.fps}
-                    source={cam.source}
-                    health={cam.health}
-                    zones={cam.zones}
-                    detections={cam.detections}
-                    maxTier={cam.maxTier}
-                    lastFrameAt={cam.lastFrameAt}
-                    serverNow={serverNow}
-                    onToggleFocus={() => navigate(`/live?camera=${cam.id}`)}
-                  />
+      {/* Live Camera Feeds — thumbnail grid on the left, the alerted (or
+          clicked) camera enlarged on the right, mirroring a control-room
+          wall: everyone glances at the small feeds, the one that matters
+          right now is the big one. */}
+      <PanelGroup orientation={isDesktop ? 'horizontal' : 'vertical'} className="gap-4 items-stretch" id="dashboard-panels">
+        <Panel defaultSize={40} minSize={25} className="flex flex-col">
+          <Card
+            title={
+              <div className="flex items-center gap-2">
+                <Video className="w-4 h-4 text-accent-teal" />
+                <span>Live Camera Feeds</span>
+              </div>
+            }
+            subtitle={`${liveCams}/${cameras.length} online — click a feed to view it larger`}
+            action={
+              <Button variant="ghost" size="sm" className="text-xs" rightIcon={<ArrowRight className="w-3.5 h-3.5" />} onClick={() => navigate('/live')}>
+                View All
+              </Button>
+            }
+            className="h-full"
+          >
+            {gridCameras.length === 0 ? (
+              <div className="p-8 text-center text-xs text-text-dim font-mono">
+                {reachable === false ? 'Backend offline — camera status unknown.' : 'No cameras configured. Set CAMERA_SOURCES in .env or use Camera Management.'}
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  {gridCameras.map((cam) => {
+                    const camWatchlistMatch = watchlistByCamera.get(cam.id) ?? null;
+                    return (
+                      <div key={cam.id} onClick={() => setSelectedCameraId(cam.id)} className="cursor-pointer relative">
+                        {cam.id === selectedCamera?.id && (
+                          <span className={cn('absolute right-2 z-30 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-accent-teal/90 text-black', camWatchlistMatch ? 'top-9' : 'top-2')}>
+                            SELECTED
+                          </span>
+                        )}
+                        {cam.maxTier === 'red' && (
+                          <span className={cn('absolute right-2 z-30 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-accent-red text-white animate-pulse', camWatchlistMatch ? 'top-16' : 'top-2')}>
+                            ALERT
+                          </span>
+                        )}
+                        <CameraTile
+                          cameraName={cam.name}
+                          streamUrl={cam.streamUrl}
+                          fps={cam.fps}
+                          source={cam.source}
+                          health={cam.health}
+                          zones={cam.zones}
+                          detections={cam.detections}
+                          maxTier={cam.maxTier}
+                          lastFrameAt={cam.lastFrameAt}
+                          serverNow={serverNow}
+                          watchlistMatch={camWatchlistMatch}
+                          isFocused={cam.id === selectedCamera?.id}
+                          onToggleFocus={() => navigate(`/live?camera=${cam.id}`)}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-            {extraCameraCount > 0 && (
-              <button
-                onClick={() => navigate('/live')}
-                className="mt-3 w-full text-center text-[11px] font-mono text-text-dim hover:text-text-primary py-2 rounded-lg border border-dashed border-ink/10 hover:border-ink/25 transition-colors"
-              >
-                +{extraCameraCount} more camera{extraCameraCount === 1 ? '' : 's'} — View All
-              </button>
+                {extraCameraCount > 0 && (
+                  <button
+                    onClick={() => navigate('/live')}
+                    className="mt-3 w-full text-center text-[11px] font-mono text-text-dim hover:text-text-primary py-2 rounded-lg border border-dashed border-ink/10 hover:border-ink/25 transition-colors"
+                  >
+                    +{extraCameraCount} more camera{extraCameraCount === 1 ? '' : 's'} — View All
+                  </button>
+                )}
+              </>
             )}
-          </>
-        )}
-      </Card>
+          </Card>
+        </Panel>
+
+        <PanelResizeHandle className={`flex items-center justify-center shrink-0 rounded transition-colors group ${isDesktop ? 'w-2 cursor-col-resize hover:bg-accent-teal/10' : 'h-2 cursor-row-resize hover:bg-accent-teal/10'}`}>
+          <div className={`${isDesktop ? 'w-1 h-8' : 'w-8 h-1'} bg-ink/20 group-hover:bg-accent-teal rounded-full transition-colors flex items-center justify-center`}>
+            {isDesktop ? <GripVertical className="w-2.5 h-2.5 text-text-dim group-hover:text-accent-teal" /> : <GripHorizontal className="w-2.5 h-2.5 text-text-dim group-hover:text-accent-teal" />}
+          </div>
+        </PanelResizeHandle>
+
+        <Panel defaultSize={60} minSize={30} className="flex flex-col">
+          <Card
+            title={
+              <div className="flex items-center gap-2">
+                <Video className="w-4 h-4 text-accent-teal" />
+                <span>Selected Camera{selectedCamera ? ` — ${selectedCamera.name}` : ''}</span>
+              </div>
+            }
+            subtitle={
+              latestAlert && selectedCamera?.id === latestAlert.cameraName
+                ? 'Showing the camera with the latest alert'
+                : selectedCamera
+                ? selectedCamera.location
+                : undefined
+            }
+            action={
+              selectedCamera?.health === 'online' && (
+                <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-accent-red">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent-red animate-pulse" />
+                  LIVE
+                </span>
+              )
+            }
+            className="h-full"
+            bodyClassName="p-3"
+          >
+            {!selectedCamera ? (
+              <div className="p-8 text-center text-xs text-text-dim font-mono">No camera selected</div>
+            ) : (
+              <CameraTile
+                cameraName={selectedCamera.name}
+                label={selectedCamera.location}
+                streamUrl={selectedCamera.streamUrl}
+                fps={selectedCamera.fps}
+                source={selectedCamera.source}
+                health={selectedCamera.health}
+                zones={selectedCamera.zones}
+                detections={selectedCamera.detections}
+                maxTier={selectedCamera.maxTier}
+                lastFrameAt={selectedCamera.lastFrameAt}
+                serverNow={serverNow}
+                watchlistMatch={watchlistByCamera.get(selectedCamera.id) ?? null}
+                isFocused
+                onToggleFocus={() => navigate(`/live?camera=${selectedCamera.id}`)}
+                className="h-full"
+              />
+            )}
+          </Card>
+        </Panel>
+      </PanelGroup>
 
       {/* Offline Video Analysis — upload a recorded clip and activate it so
           the real AI pipeline analyses it, same as a live camera. */}

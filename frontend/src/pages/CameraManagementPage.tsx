@@ -280,7 +280,7 @@ export const CameraManagementPage: React.FC = () => {
                         {cam.location} · {cam.sector}
                       </p>
                       <p className="text-[11px] font-mono text-text-muted mt-0.5 flex items-center gap-1 truncate">
-                        {rtsp && <Lock className="w-3 h-3 shrink-0" title="Credentials hidden" />}
+                        {rtsp && <Lock className="w-3 h-3 shrink-0" />}
                         {rtsp ? maskRtspUrl(cam.source as string) : `source: ${cam.source ?? '—'}`}
                       </p>
                       {testResult && (

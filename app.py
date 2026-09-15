@@ -58,6 +58,7 @@ from config.settings import (
     IDLE_MIN_FPS,
     MAX_TIER_HOLD_SECONDS,
     MOTION_THRESHOLD,
+    RUNNING_ALERT_HOLD_SECONDS,
     REID_FACE_CHECK_INTERVAL,
     REID_MATCH_MARGIN,
     REID_MODEL_PATH,
@@ -168,16 +169,25 @@ def zone_group_count(detections: list) -> int:
 
     Group risk is a property of the frame, not of one detection, so it is
     counted once here and handed to every person's score — a lone walker and
-    one of five people at the line must not read the same."""
+    one of five people at the line must not read the same.
+
+    Only counts a detection whose track has survived to a second frame
+    (`direction is not None` — TrackHistory.update returns None for a
+    track's very first appearance, see tracking/history.py). A one-frame
+    YOLO false positive (shadow, reflection, motion blur) would otherwise
+    get counted as a person the instant it appears, briefly inflating the
+    group count — and therefore G= — for a scene that has no extra person
+    in it at all."""
     return sum(
         1 for d in detections
         if d.category() == "person" and d.zone_tier and d.zone_tier != "none"
+        and d.direction is not None
     )
 
 
 def draw_threat_score_overlay(
     frame, det, scorer: ThreatScorer, dwell_seconds: float, group_count: int,
-    alert_slot: int = 0, fps: "float | None" = None,
+    fps: "float | None" = None,
 ):
     # Normalize px/frame to what it would be at NOMINAL_KINEMATICS_FPS, so a
     # slow-sampled camera doesn't read an ordinary walk as a sprint (see
@@ -229,17 +239,43 @@ def draw_threat_score_overlay(
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1,
         )
 
-    # A running person is the clearest anomaly on the feed - see
-    # ThreatScorer._running_override. Give it a visual treatment a sentry
-    # can't miss at a glance rather than just another line of text: a heavy
-    # dark outline around them and a zoomed-in inset in a frame corner.
-    # Only when the tier actually landed on red - a tier_ceiling can pull an
-    # override back down to yellow, and the heavy "still running" treatment
-    # should agree with the real, possibly-capped severity, not the raw override.
-    if score.tier == "red" and score.override_reason is not None and "running" in score.override_reason:
-        _draw_running_high_alert(frame, det.box, alert_slot)
-
     return score
+
+
+def is_running_alert(score) -> bool:
+    """A running person is the clearest anomaly on the feed - see
+    ThreatScorer._running_override. Only true when the tier actually landed
+    on red - a tier_ceiling can pull an override back down to yellow, and the
+    heavy "still running" treatment should agree with the real, possibly-
+    capped severity, not the raw override."""
+    return (
+        score.tier == "red"
+        and score.override_reason is not None
+        and "running" in score.override_reason
+    )
+
+
+def should_show_running_alert(hold_state: dict, key, running_now: bool, now: float) -> bool:
+    """Whether to draw the running zoom-inset THIS frame: either the person
+    is running right now, or they were within the last RUNNING_ALERT_HOLD_SECONDS
+    (per-track, via `key` - the same dwell_key used for loitering, so it
+    survives a ByteTrack id churn the same way). Drawn fresh every frame off
+    the raw per-frame override, this used to vanish the instant one frame's
+    speed reading dipped back under the sprint threshold - a runner slowing
+    mid-stride, or one noisy tracker frame, could flash it for under a
+    second. `hold_state` is one camera's dict of key -> last-seen timestamp,
+    self-pruning: an expired key is removed here rather than swept separately.
+    """
+    if running_now:
+        hold_state[key] = now
+        return True
+    last_seen = hold_state.get(key)
+    if last_seen is None:
+        return False
+    if now - last_seen <= RUNNING_ALERT_HOLD_SECONDS:
+        return True
+    del hold_state[key]
+    return False
 
 
 # Deliberately dark/heavy and visually distinct from the ordinary green/red/
@@ -404,6 +440,7 @@ def main() -> None:
         webhook=webhook,
         syslog=syslog,
         dispatcher=alert_dispatcher,
+        watchlist_db=watchlist_db,
     )
     # Seconds between full pipeline passes while a scene is idle. Guard against
     # a zero/negative setting turning the floor into a division error.
@@ -427,6 +464,9 @@ def main() -> None:
     # known identity/watchlist result instead of blanking it out.
     person_id_cache = {name: {} for name in CAMERA_SOURCES}
     watchlist_cache = {name: {} for name in CAMERA_SOURCES}
+    # Per-camera, per-track "last seen running" timestamps backing the
+    # running zoom-inset's hold window - see should_show_running_alert.
+    running_alert_hold = {name: {} for name in CAMERA_SOURCES}
 
     isolator = CameraErrorIsolator()
     last_health: dict[str, str] = {}
@@ -522,7 +562,19 @@ def main() -> None:
                     if embedding is not None:
                         with profiler.stage("watchlist_match"):
                             match_name, similarity = watchlist_matcher.match(embedding)
-                        watchlist_cache[name][track_id] = (match_name, similarity)
+                        prev_match, prev_similarity = watchlist_cache[name].get(
+                            track_id, (None, 0.0)
+                        )
+                        # Keep the best match ever seen for this track. A face
+                        # is only re-checked every REID_FACE_CHECK_INTERVAL
+                        # frames, and a single later check catching a worse
+                        # angle/lighting moment must not erase a genuine match
+                        # found earlier — that silently dropped real matches
+                        # the pipeline had already made.
+                        if prev_match is None or (
+                            match_name is not None and similarity > prev_similarity
+                        ):
+                            watchlist_cache[name][track_id] = (match_name, similarity)
                 cached_match, cached_similarity = watchlist_cache[name].get(
                     track_id, (None, 0.0)
                 )
@@ -560,10 +612,12 @@ def main() -> None:
             )
             dwell = loiter_trackers[name].update(dwell_key, det.zone_tier)
             score = draw_threat_score_overlay(
-                processed, det, threat_scorer, dwell, group_count,
-                alert_slot=running_alert_slot, fps=fps_ema[name],
+                processed, det, threat_scorer, dwell, group_count, fps=fps_ema[name],
             )
-            if score.tier == "red" and score.override_reason is not None and "running" in score.override_reason:
+            if should_show_running_alert(
+                running_alert_hold[name], dwell_key, is_running_alert(score), now
+            ):
+                _draw_running_high_alert(processed, det.box, running_alert_slot)
                 # Next runner in this frame (if any) gets its own zoom inset
                 # stacked below this one instead of drawing on top of it.
                 running_alert_slot += 1

@@ -40,10 +40,6 @@ const routeTitles: Record<string, { title: string; subtitle: string }> = {
     title: 'Demo Mode',
     subtitle: 'Guided walkthrough of the full pipeline for a judge demo',
   },
-  '/zones': {
-    title: 'Zone Management',
-    subtitle: 'Camera-specific zone roles, severity policy, and virtual boundaries',
-  },
   '/analytics': {
     title: 'Threat Intelligence Analytics',
     subtitle: 'Kinematics breakdown, peak curfew patterns, and sector metrics',

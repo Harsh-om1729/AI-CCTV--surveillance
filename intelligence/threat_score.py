@@ -12,7 +12,33 @@ YELLOW_MAX = 69
 # no-zone and green-zone behaviour is untouched by this.
 ZONE_TIER_THRESHOLDS: dict[str, tuple[float, float]] = {
     "red": (12.0, 40.0),
-    "yellow": (22.0, 55.0),
+    # green_max raised 22 -> 30, yellow_max 55 -> 68.
+    #
+    # green_max is capped at 30 (GREEN_MAX) on purpose, not higher: YELLOW
+    # must stay at least as sensitive as GREEN for the same total (see
+    # test_same_total_escalates_faster_in_a_more_sensitive_zone) — a medium-
+    # sensitivity zone that alerts *less* readily than a low-sensitivity one
+    # would invert what the tiers mean. 30 is the highest value that still
+    # respects that. It was 22, which meant even a person with no suspicious
+    # behaviour at all (no crossing, no loitering, not running) could already
+    # clear it off baseline alone; 30 covers plain daytime presence with
+    # nothing else going on (sector 12 + daytime 4 + class 12 = 28), so mere
+    # detection alone now logs silently (Green). A single real signal on top
+    # — near-stationary/running kinematics, a resolved direction, sustained
+    # loitering, a group, or night-time — is still enough to clear 30 and
+    # raise an actual Yellow alert; it just can't be presence alone anymore.
+    # If ordinary presence is still alerting more than expected, the next
+    # lever is the per-zone kinematics/direction weights themselves (DEFAULT_
+    # MOVEMENT_CONFIG_BY_ZONE / DEFAULT_DIRECTION_RISK_BY_ZONE in threat_rules.py),
+    # not this threshold — it cannot go higher without breaking the ordering.
+    #
+    # yellow_max: at the old 55, an ordinary detection routinely hit Red off
+    # baseline alone (one near-max kinematics or direction term was enough),
+    # which was the "too many YELLOW-zone alerts go RED" pattern reported
+    # live. 68 means one strong factor is no longer enough by itself — it
+    # takes a genuine combination, same spirit as RED's own tight (12, 40)
+    # but calibrated for YELLOW's lower base sensitivity.
+    "yellow": (30.0, 68.0),
     "green": (float(GREEN_MAX), float(YELLOW_MAX)),
     "none": (float(GREEN_MAX), float(YELLOW_MAX)),
 }
@@ -184,6 +210,20 @@ class ThreatScorer:
     Deliberately transparent: a sentry sees *why* something scored Red —
     which component drove it — not just a black-box alert.
 
+    Each component itself is also zone-aware now (see the "_by_zone" tables
+    in ThreatRulesDB / DEFAULT_*_BY_ZONE): the same 10-second loiter or same
+    2-person group reports more risk in a RED zone than a GREEN one, and the
+    same 12px/frame sprint counts as "fast" sooner in RED than in GREEN.
+    Combined with ZONE_TIER_THRESHOLDS this means RED is *sensitive* (reacts
+    to less evidence) rather than *automatically maximal* — a genuinely
+    suspicious combination in a GREEN zone (fast + group + loitering, all at
+    once) can still out-total an ordinary, unremarkable event in a RED zone.
+    The one deliberate exception is ThreatScorer._crossing_override below: an
+    actual border-line breach inside the RED zone is always forced to at
+    least a Red/high alert regardless of the additive total — a confirmed
+    crossing of the restricted line is never allowed to read as Green or
+    Yellow just because nothing else about it looked unusual.
+
     The last three terms are what make this a *border* rule set rather than a
     generic intrusion alarm:
       - direction: crossing the line matters, and in both senses (inward is
@@ -214,8 +254,8 @@ class ThreatScorer:
     ) -> ThreatScore:
         sector_risk = self.rules.get_sector_risk(zone_tier or "none")
         time_risk = self.rules.get_time_risk(hour)
-        class_confidence = self.rules.get_class_confidence(category)
-        kinematics_risk = self._kinematics_risk(speed_px_per_frame)
+        class_confidence = self.rules.get_class_confidence(category, zone_tier)
+        kinematics_risk = self._kinematics_risk(speed_px_per_frame, zone_tier)
 
         # The border-specific terms apply to people inside a defined zone.
         # Outside any zone there is no border line to cross, loiter at, or
@@ -223,12 +263,12 @@ class ThreatScorer:
         # the old rule set produced on un-zoned footage.
         in_zone = bool(zone_tier) and zone_tier != "none"
         is_person = category == "person"
-        direction_risk = self.rules.get_direction_risk(zone_direction) if in_zone else 0.0
+        direction_risk = self.rules.get_direction_risk(zone_direction, zone_tier) if in_zone else 0.0
         loiter_risk = (
-            self._loiter_risk(dwell_seconds) if in_zone and is_person else 0.0
+            self._loiter_risk(dwell_seconds, zone_tier) if in_zone and is_person else 0.0
         )
         group_risk = (
-            self.rules.get_group_risk(group_count) if in_zone and is_person else 0.0
+            self.rules.get_group_risk(group_count, zone_tier) if in_zone and is_person else 0.0
         )
 
         # A watchlist hit outranks a crossing: it names *who* this is, not just
@@ -237,7 +277,7 @@ class ThreatScorer:
         override_reason = (
             self._watchlist_override(watchlist_match, watchlist_similarity)
             or self._crossing_override(zone_tier, zone_direction, category)
-            or self._running_override(speed_px_per_frame, category)
+            or self._running_override(speed_px_per_frame, category, zone_tier)
         )
         elevate_reason = self._yellow_elevate(zone_tier, zone_direction, category)
 
@@ -309,15 +349,17 @@ class ThreatScorer:
     # crossing overrides: it forces Red outright rather than waiting for the
     # additive total to get there, so a running person is never one zone or
     # one time-of-day away from staying Yellow.
-    def _running_override(self, speed_px_per_frame: float, category: str) -> "str | None":
+    def _running_override(
+        self, speed_px_per_frame: float, category: str, zone_tier: "str | None" = None
+    ) -> "str | None":
         if category != "person":
             return None
-        fast = self.rules.get_movement_config()["fast_speed_px_per_frame"]
+        fast = self.rules.get_movement_config(zone_tier)["fast_speed_px_per_frame"]
         if speed_px_per_frame < fast:
             return None
         return f"person running ({speed_px_per_frame:.1f}px/frame >= {fast:.0f} sprint threshold)"
 
-    def _kinematics_risk(self, speed: float) -> float:
+    def _kinematics_risk(self, speed: float, zone_tier: "str | None" = None) -> float:
         r"""U-curve: both near-stationary and running score high, an ordinary
         walking pace scores lowest.
 
@@ -332,7 +374,7 @@ class ThreatScorer:
         man lying still at the fence — the textbook infiltration posture — as
         zero risk.
         """
-        config = self.rules.get_movement_config()
+        config = self.rules.get_movement_config(zone_tier)
         still = config["still_speed_px_per_frame"]
         walk_min = config["walk_min_px_per_frame"]
         walk_max = config["walk_max_px_per_frame"]
@@ -352,8 +394,8 @@ class ThreatScorer:
         fraction = (speed - walk_max) / (fast - walk_max)
         return fraction * max_risk
 
-    def _loiter_risk(self, dwell_seconds: float) -> float:
-        config = self.rules.get_loiter_config()
+    def _loiter_risk(self, dwell_seconds: float, zone_tier: "str | None" = None) -> float:
+        config = self.rules.get_loiter_config(zone_tier)
         if dwell_seconds >= config["alert_seconds"]:
             return config["alert_risk"]
         if dwell_seconds >= config["warn_seconds"]:

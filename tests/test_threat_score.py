@@ -153,9 +153,15 @@ class TestThreatScorer(unittest.TestCase):
         """The original point of the test above, isolated from the running
         override: a speed inside the ramping band (below the sprint
         threshold) still reaches Red in a RED zone purely through additive
-        zone sensitivity, with no override firing."""
+        zone sensitivity, with no override firing.
+
+        Uses RED's own (more sensitive) movement config — RED zones now have
+        their own zone-specific speed thresholds (see DEFAULT_MOVEMENT_CONFIG_BY_ZONE),
+        lower than the global/YELLOW ones, so "moderate" has to be computed
+        relative to RED's own walk_max/fast band, not the global one, or this
+        speed could already cross RED's (lower) sprint threshold."""
         scorer = self._scorer()
-        config = scorer.rules.get_movement_config()
+        config = scorer.rules.get_movement_config("red")
         moderate_speed = (config["walk_max_px_per_frame"] + config["fast_speed_px_per_frame"]) / 2
         score = scorer.score(zone_tier="red", hour=2, speed_px_per_frame=moderate_speed, category="person")
         self.assertEqual(score.tier, "red")

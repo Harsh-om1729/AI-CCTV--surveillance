@@ -9,7 +9,15 @@ log = logging.getLogger("ibvap.intelligence")
 # were hand-edited locally are left alone (see _migrate). This keeps the
 # "seeded once, never clobbered" promise for operator tuning while still
 # letting a calibration change reach existing air-gapped installs.
-RULES_VERSION = 2
+#
+# v3 adds five new "_by_zone" tables (movement/loiter/group/direction/class,
+# see DEFAULT_*_BY_ZONE below) alongside the existing global ones rather than
+# reshaping them in place — a brand-new table always seeds cleanly via
+# _seed_table's normal "empty -> insert defaults" path, no value-diffing
+# migration needed, and the old global tables are left exactly as they were
+# (still used as-is for un-zoned/"none" lookups, and as the fallback if a
+# zone-specific row is ever missing).
+RULES_VERSION = 3
 
 # --- v2: border-surveillance calibration -----------------------------------
 # Budget, so a sentry can reason about the 0-100 total:
@@ -62,6 +70,79 @@ DEFAULT_LOITER_CONFIG = {
 # Number of people simultaneously inside a zone. A group at the line is a
 # materially different event from one person.
 DEFAULT_GROUP_RISK = {1: 0.0, 2: 3.0, 3: 5.0, 5: 7.0}  # keyed by minimum count
+
+# --- v3: per-zone rule catalogs ---------------------------------------------
+# Every category below now has its own red/yellow/green variant instead of one
+# shared table. This is the actual "sensitivity" dial: RED is tuned to react
+# to *less* evidence (short loiter, small group, modest speed change already
+# matter next to the restricted line), GREEN needs substantially more
+# evidence before the same behaviour is worth flagging (people and vehicles
+# are normal on your own territory), YELLOW sits in between and matches the
+# pre-v3 global defaults exactly, so un-zoned/legacy behaviour is unchanged.
+#
+# The total score formula itself stays zone-agnostic (still a plain sum of
+# these components) — zone only changes *how much* each component reports
+# for the same raw behaviour, plus the existing ZONE_TIER_THRESHOLDS in
+# threat_score.py which changes how much total it takes to escalate. A truly
+# suspicious combination in a GREEN zone (fast + group + loitering) can still
+# out-total a mild, ordinary crossing in a YELLOW zone; only a RED-zone
+# border-line *crossing* is force-escalated regardless of total (see
+# ThreatScorer._crossing_override — deliberately not softened: a confirmed
+# breach of the restricted line is always at least a high alert).
+DEFAULT_MOVEMENT_CONFIG_BY_ZONE = {
+    "red": {
+        "still_speed_px_per_frame": 1.0,
+        "walk_min_px_per_frame": 1.5,
+        "walk_max_px_per_frame": 6.0,
+        "fast_speed_px_per_frame": 10.0,
+        "max_movement_risk": 14.0,
+    },
+    "yellow": dict(DEFAULT_MOVEMENT_CONFIG),
+    "green": {
+        "still_speed_px_per_frame": 0.5,
+        "walk_min_px_per_frame": 2.5,
+        "walk_max_px_per_frame": 10.0,
+        "fast_speed_px_per_frame": 18.0,
+        "max_movement_risk": 8.0,
+    },
+}
+
+DEFAULT_LOITER_CONFIG_BY_ZONE = {
+    "red": {
+        "warn_seconds": 10.0,
+        "warn_risk": 8.0,
+        "alert_seconds": 45.0,
+        "alert_risk": 16.0,
+    },
+    "yellow": dict(DEFAULT_LOITER_CONFIG),
+    "green": {
+        "warn_seconds": 90.0,
+        "warn_risk": 3.0,
+        "alert_seconds": 300.0,
+        "alert_risk": 6.0,
+    },
+}
+
+DEFAULT_GROUP_RISK_BY_ZONE = {
+    "red": {2: 5.0, 3: 8.0, 5: 11.0, 8: 14.0},
+    "yellow": {2: 3.0, 3: 5.0, 5: 7.0, 8: 10.0},
+    "green": {2: 1.0, 3: 2.0, 5: 4.0, 8: 7.0},
+}
+
+DEFAULT_DIRECTION_RISK_BY_ZONE = {
+    "red": {"inward": 22.0, "outward": 20.0, "crossing": 22.0, "parallel": 8.0},
+    "yellow": {"inward": 18.0, "outward": 16.0, "crossing": 18.0, "parallel": 5.0},
+    "green": {"inward": 10.0, "outward": 8.0, "crossing": 10.0, "parallel": 2.0},
+}
+
+DEFAULT_CLASS_CONFIDENCE_BY_ZONE = {
+    # A vehicle right at the restricted line is far more anomalous than one
+    # on your own territory (parking, deliveries) — RED weighs vehicle
+    # almost as heavily as person for exactly that reason.
+    "red": {"person": 16.0, "vehicle": 14.0, "animal": 2.0},
+    "yellow": dict(DEFAULT_CLASS_CONFIDENCE),
+    "green": {"person": 8.0, "vehicle": 4.0, "animal": 1.0},
+}
 
 # --- v1 defaults, kept only to recognise untouched rows during migration ----
 V1_SECTOR_RISK = {"red": 30.0, "yellow": 15.0, "green": 5.0, "none": 0.0}
@@ -129,6 +210,36 @@ class ThreatRulesDB:
                 min_count INTEGER PRIMARY KEY,
                 risk REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS movement_risk_config_by_zone (
+                zone_tier TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value REAL NOT NULL,
+                PRIMARY KEY (zone_tier, key)
+            );
+            CREATE TABLE IF NOT EXISTS loiter_config_by_zone (
+                zone_tier TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value REAL NOT NULL,
+                PRIMARY KEY (zone_tier, key)
+            );
+            CREATE TABLE IF NOT EXISTS group_risk_by_zone (
+                zone_tier TEXT NOT NULL,
+                min_count INTEGER NOT NULL,
+                risk REAL NOT NULL,
+                PRIMARY KEY (zone_tier, min_count)
+            );
+            CREATE TABLE IF NOT EXISTS direction_risk_by_zone (
+                zone_tier TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                risk REAL NOT NULL,
+                PRIMARY KEY (zone_tier, direction)
+            );
+            CREATE TABLE IF NOT EXISTS class_confidence_by_zone (
+                zone_tier TEXT NOT NULL,
+                category TEXT NOT NULL,
+                risk REAL NOT NULL,
+                PRIMARY KEY (zone_tier, category)
+            );
             CREATE TABLE IF NOT EXISTS rules_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -145,6 +256,11 @@ class ThreatRulesDB:
         self._seed_table("direction_risk", "direction", "risk", DEFAULT_DIRECTION_RISK)
         self._seed_table("loiter_config", "key", "value", DEFAULT_LOITER_CONFIG)
         self._seed_table("group_risk", "min_count", "risk", DEFAULT_GROUP_RISK)
+        self._seed_by_zone_table("movement_risk_config_by_zone", "key", DEFAULT_MOVEMENT_CONFIG_BY_ZONE)
+        self._seed_by_zone_table("loiter_config_by_zone", "key", DEFAULT_LOITER_CONFIG_BY_ZONE)
+        self._seed_by_zone_table("group_risk_by_zone", "min_count", DEFAULT_GROUP_RISK_BY_ZONE)
+        self._seed_by_zone_table("direction_risk_by_zone", "direction", DEFAULT_DIRECTION_RISK_BY_ZONE)
+        self._seed_by_zone_table("class_confidence_by_zone", "category", DEFAULT_CLASS_CONFIDENCE_BY_ZONE)
 
     def _seed_table(self, table: str, key_col: str, value_col: str, defaults: dict) -> None:
         cur = self._conn.execute(f"SELECT COUNT(*) FROM {table}")
@@ -156,6 +272,29 @@ class ThreatRulesDB:
         )
         self._conn.commit()
         log.info("Seeded default rules into %s (%d rows)", table, len(defaults))
+
+    def _seed_by_zone_table(self, table: str, key_col: str, defaults_by_zone: dict) -> None:
+        """Same never-overwrite rule as _seed_table, for a (zone_tier, key,
+        value) table seeded from a {zone_tier: {key: value}} nested dict."""
+        cur = self._conn.execute(f"SELECT COUNT(*) FROM {table}")
+        if cur.fetchone()[0] > 0:
+            return
+        rows = [
+            (zone_tier, key, value)
+            for zone_tier, defaults in defaults_by_zone.items()
+            for key, value in defaults.items()
+        ]
+        # movement/loiter store a "value" column (a config number keyed by
+        # name); group/direction/class store a "risk" column (a risk points
+        # value keyed by count/direction/category) — matches each table's
+        # CREATE TABLE above.
+        value_col = "value" if table in ("movement_risk_config_by_zone", "loiter_config_by_zone") else "risk"
+        self._conn.executemany(
+            f"INSERT INTO {table} (zone_tier, {key_col}, {value_col}) VALUES (?, ?, ?)",
+            rows,
+        )
+        self._conn.commit()
+        log.info("Seeded default per-zone rules into %s (%d rows)", table, len(rows))
 
     # -- migration ----------------------------------------------------------
     def _stored_version(self) -> int:
@@ -244,28 +383,68 @@ class ThreatRulesDB:
     def get_time_risk(self, hour: int) -> float:
         return self._lookup("time_risk", "hour", "risk", hour, default=4.0)
 
-    def get_class_confidence(self, category: str) -> float:
+    def get_class_confidence(self, category: str, zone_tier: "str | None" = None) -> float:
+        """`zone_tier` ("red"/"yellow"/"green") consults that zone's own
+        rule row first; omitted, None, or "none" (no zone drawn/pinned for
+        this camera) uses the shared global table — same value every install
+        has always gotten, so un-zoned footage is unaffected by v3."""
+        if zone_tier in ("red", "yellow", "green"):
+            row = self._lookup_optional(
+                "class_confidence_by_zone", "zone_tier", "category", "risk", zone_tier, category
+            )
+            if row is not None:
+                return row
         return self._lookup("class_confidence", "category", "risk", category, default=0.0)
 
-    def get_direction_risk(self, direction: "str | None") -> float:
-        return self._lookup(
-            "direction_risk", "direction", "risk", direction or "none", default=0.0
-        )
+    def get_direction_risk(self, direction: "str | None", zone_tier: "str | None" = None) -> float:
+        key = direction or "none"
+        if zone_tier in ("red", "yellow", "green"):
+            row = self._lookup_optional(
+                "direction_risk_by_zone", "zone_tier", "direction", "risk", zone_tier, key
+            )
+            if row is not None:
+                return row
+        return self._lookup("direction_risk", "direction", "risk", key, default=0.0)
 
-    def get_movement_config(self) -> dict:
+    def get_movement_config(self, zone_tier: "str | None" = None) -> dict:
         cur = self._conn.execute("SELECT key, value FROM movement_risk_config")
         stored = dict(cur.fetchall())
         # Fall back per-key: a DB hand-edited under the old linear rule won't
         # have the U-curve keys, and a KeyError here would take down scoring.
-        return {**DEFAULT_MOVEMENT_CONFIG, **stored}
+        config = {**DEFAULT_MOVEMENT_CONFIG, **stored}
+        if zone_tier in ("red", "yellow", "green"):
+            cur = self._conn.execute(
+                "SELECT key, value FROM movement_risk_config_by_zone WHERE zone_tier = ?", (zone_tier,)
+            )
+            zone_stored = dict(cur.fetchall())
+            if zone_stored:
+                config.update(zone_stored)
+        return config
 
-    def get_loiter_config(self) -> dict:
+    def get_loiter_config(self, zone_tier: "str | None" = None) -> dict:
         cur = self._conn.execute("SELECT key, value FROM loiter_config")
-        return {**DEFAULT_LOITER_CONFIG, **dict(cur.fetchall())}
+        config = {**DEFAULT_LOITER_CONFIG, **dict(cur.fetchall())}
+        if zone_tier in ("red", "yellow", "green"):
+            cur = self._conn.execute(
+                "SELECT key, value FROM loiter_config_by_zone WHERE zone_tier = ?", (zone_tier,)
+            )
+            zone_stored = dict(cur.fetchall())
+            if zone_stored:
+                config.update(zone_stored)
+        return config
 
-    def get_group_risk(self, count: int) -> float:
+    def get_group_risk(self, count: int, zone_tier: "str | None" = None) -> float:
         """Risk for `count` people seen together — the highest threshold at or
         below `count` wins, so the table stays sparse and easy to hand-edit."""
+        if zone_tier in ("red", "yellow", "green"):
+            cur = self._conn.execute(
+                "SELECT risk FROM group_risk_by_zone WHERE zone_tier = ? AND min_count <= ? "
+                "ORDER BY min_count DESC LIMIT 1",
+                (zone_tier, count),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return row[0]
         cur = self._conn.execute(
             "SELECT risk FROM group_risk WHERE min_count <= ? ORDER BY min_count DESC LIMIT 1",
             (count,),
@@ -277,6 +456,15 @@ class ThreatRulesDB:
         cur = self._conn.execute(f"SELECT {value_col} FROM {table} WHERE {key_col} = ?", (key,))
         row = cur.fetchone()
         return row[0] if row is not None else default
+
+    def _lookup_optional(
+        self, table: str, zone_col: str, key_col: str, value_col: str, zone_tier: str, key
+    ) -> "float | None":
+        cur = self._conn.execute(
+            f"SELECT {value_col} FROM {table} WHERE {zone_col} = ? AND {key_col} = ?", (zone_tier, key)
+        )
+        row = cur.fetchone()
+        return row[0] if row is not None else None
 
     def close(self) -> None:
         self._conn.close()

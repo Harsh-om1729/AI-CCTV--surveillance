@@ -233,6 +233,16 @@ ALERT_MAX_COOLDOWN_SECONDS = float(os.getenv("ALERT_MAX_COOLDOWN_SECONDS", "64")
 # before letting it decay, so an operator has time to actually see it.
 MAX_TIER_HOLD_SECONDS = float(os.getenv("MAX_TIER_HOLD_SECONDS", "6"))
 
+# Same idea as MAX_TIER_HOLD_SECONDS above, but for the running-person zoom
+# inset (app.py's _draw_running_high_alert): drawn fresh every frame straight
+# off ThreatScorer._running_override, so it used to vanish the instant that
+# one frame's speed reading dropped back under the sprint threshold - a
+# runner slowing down mid-stride, or a single noisy tracker frame, could make
+# it flash for well under a second, too fast for a sentry to actually read
+# the crop or the "HIGH ALERT: RUNNING" text. This holds it on screen for
+# this many seconds since the person was *last* seen running, per track.
+RUNNING_ALERT_HOLD_SECONDS = float(os.getenv("RUNNING_ALERT_HOLD_SECONDS", "5"))
+
 # Cosine similarity (0-1) above which a face is treated as a watchlist match.
 # 0.5 was matching almost any face against a stored embedding (observed hits
 # as low as 0.51-0.55 against an unrelated person) - raised to cut false

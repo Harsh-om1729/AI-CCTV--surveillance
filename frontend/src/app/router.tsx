@@ -10,7 +10,6 @@ import { AiAnalysisPage } from '@/pages/AiAnalysisPage';
 import { IncidentsPage } from '@/pages/IncidentsPage';
 import { CameraManagementPage } from '@/pages/CameraManagementPage';
 import { DemoModePage } from '@/pages/DemoModePage';
-import { ZonesPage } from '@/pages/ZonesPage';
 import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { WatchlistPage } from '@/pages/WatchlistPage';
 import { SettingsPage } from '@/pages/SettingsPage';
@@ -37,7 +36,6 @@ export const AppRouter = () => {
                   <Route path="/detections" element={<IncidentsPage />} />
                   <Route path="/cameras" element={<CameraManagementPage />} />
                   <Route path="/demo" element={<DemoModePage />} />
-                  <Route path="/zones" element={<ZonesPage />} />
                   <Route path="/analytics" element={<AnalyticsPage />} />
                   <Route path="/watchlist" element={<WatchlistPage />} />
                   <Route path="/settings" element={<SettingsPage />} />

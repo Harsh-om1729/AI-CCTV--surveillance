@@ -63,12 +63,19 @@ export const SystemHealthProvider: React.FC<{ children: ReactNode }> = ({ childr
     mounted.current = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
-      // Skip while the tab is hidden: nobody is looking, and a wall of
-      // background tabs should not keep the edge node busy.
+      // Skip the *recurring* poll while hidden: nobody is looking, and a
+      // wall of background tabs should not keep the edge node busy.
       if (!document.hidden) await refresh();
       if (mounted.current) timer = setTimeout(tick, POLL_MS);
     };
-    tick();
+    // The first fetch always runs, tab hidden or not — otherwise a dashboard
+    // that happens to load in a background/unfocused tab (a second monitor,
+    // another window on top, a tab opened but not switched to) sits on
+    // "Checking system..." / "Loading cameras..." forever, since nothing
+    // else ever triggers an initial fetch to get it out of that state.
+    refresh().then(() => {
+      if (mounted.current) timer = setTimeout(tick, POLL_MS);
+    });
     const onVisible = () => {
       if (!document.hidden) refresh();
     };

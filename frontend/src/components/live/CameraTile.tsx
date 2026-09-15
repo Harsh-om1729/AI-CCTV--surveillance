@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Video, Maximize2, Minimize2, Trash2, AlertTriangle, RefreshCw, Square } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Video, Maximize2, Minimize2, Trash2, AlertTriangle, RefreshCw, Square, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface CameraTileProps {
@@ -24,6 +24,11 @@ export interface CameraTileProps {
    *  lastFrameAt so browser/server clock skew cannot fake a stall. */
   serverNow?: number | null;
   isFocused?: boolean;
+  /** Most recent watchlist hit on this camera, if any — see AlertProvider's
+   * `alerts` (each already carries `watchlistMatch`/`watchlistSimilarity`
+   * from the incident). Only pass one still recent enough to mean "this
+   * person may still be in frame", not the camera's all-time history. */
+  watchlistMatch?: { name: string; similarity: number; photoUrl?: string } | null;
   onToggleFocus?: () => void;
   onRemove?: () => void;
   /** Releases the device now instead of waiting for the idle timer (see
@@ -52,6 +57,7 @@ export const CameraTile: React.FC<CameraTileProps> = ({
   lastFrameAt,
   serverNow,
   isFocused = false,
+  watchlistMatch,
   onToggleFocus,
   onRemove,
   onStop,
@@ -95,6 +101,37 @@ export const CameraTile: React.FC<CameraTileProps> = ({
     serverNow != null &&
     serverNow - lastFrameAt > 6;
 
+  // A reconnect (backend restart, or the browser dropping and re-opening the
+  // MJPEG connection) usually resolves in well under a second. Showing the
+  // "Connecting…" overlay the instant that happens made every brief blip
+  // look like the camera feed breaking. Only surface it once the gap has
+  // actually lasted long enough to matter; a quick reconnect now finishes
+  // silently, with the last frame still on screen the whole time.
+  const isLive = streamState === 'live' && !stalled;
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const overlayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (isLive) {
+      if (overlayTimer.current) {
+        clearTimeout(overlayTimer.current);
+        overlayTimer.current = null;
+      }
+      setOverlayVisible(false);
+      return;
+    }
+    if (overlayTimer.current) return;
+    overlayTimer.current = setTimeout(() => {
+      setOverlayVisible(true);
+      overlayTimer.current = null;
+    }, 900);
+    return () => {
+      if (overlayTimer.current) {
+        clearTimeout(overlayTimer.current);
+        overlayTimer.current = null;
+      }
+    };
+  }, [isLive]);
+
   const sourceBadge =
     source === 'pipeline'
       ? { text: 'AI PIPELINE', cls: 'bg-accent-green/10 text-accent-green border-accent-green/30' }
@@ -121,7 +158,7 @@ export const CameraTile: React.FC<CameraTileProps> = ({
       )}
     >
       <div className="relative aspect-video w-full bg-[#05070a] flex items-center justify-center overflow-hidden">
-        {src && streamState !== 'error' && (
+        {src && (
           <img
             key={attempt}
             src={src}
@@ -132,8 +169,10 @@ export const CameraTile: React.FC<CameraTileProps> = ({
           />
         )}
 
-        {/* Connecting / error / stalled overlays — never a silent black tile. */}
-        {(!src || streamState !== 'live' || stalled) && (
+        {/* Connecting / error / stalled overlays — never a silent black tile,
+            but only once a reconnect has actually taken a moment (see the
+            overlayVisible effect above), so a quick blip doesn't flash it. */}
+        {(!src || overlayVisible) && (
           <div
             role="status"
             aria-live="polite"
@@ -168,8 +207,29 @@ export const CameraTile: React.FC<CameraTileProps> = ({
           </div>
         )}
 
+        {/* WATCHLIST MATCH BANNER — the whole point of the watchlist: a
+            match must be unmissable on the feed itself, not just a number
+            on the Watchlist page. Full-width so it reads before anything
+            else on the tile. */}
+        {watchlistMatch && (
+          <div className="absolute top-0 inset-x-0 z-30 flex items-center justify-center gap-1.5 py-1 px-2 bg-accent-red text-white shadow-lg animate-pulse">
+            {watchlistMatch.photoUrl ? (
+              <img
+                src={watchlistMatch.photoUrl}
+                alt={`Enrolled photo of ${watchlistMatch.name}`}
+                className="w-4 h-4 rounded-full object-cover border border-white/60 shrink-0"
+              />
+            ) : (
+              <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="font-mono text-[11px] font-bold tracking-wide truncate">
+              PERSON MATCHED FROM WATCHLIST: {watchlistMatch.name.toUpperCase()} ({Math.round(watchlistMatch.similarity * 100)}%)
+            </span>
+          </div>
+        )}
+
         {/* TOP-LEFT: camera name, health, source */}
-        <div className="absolute top-3 left-3 z-20 flex flex-wrap items-center gap-2 max-w-[75%]">
+        <div className={cn('absolute left-3 z-20 flex flex-wrap items-center gap-2 max-w-[75%]', watchlistMatch ? 'top-9' : 'top-3')}>
           <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-black/85 border border-white/10 shadow-sm max-w-full min-w-0">
             <span className={cn('inline-flex rounded-full h-1.5 w-1.5 shrink-0', healthDot)} aria-hidden />
             <span className="font-mono text-xs font-bold text-white tracking-wider uppercase truncate min-w-0">
@@ -204,7 +264,7 @@ export const CameraTile: React.FC<CameraTileProps> = ({
         </div>
 
         {/* TOP-RIGHT: controls */}
-        <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5">
+        <div className={cn('absolute right-3 z-20 flex items-center gap-1.5', watchlistMatch ? 'top-9' : 'top-3')}>
           <button
             type="button"
             onClick={(e) => {

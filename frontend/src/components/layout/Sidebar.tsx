@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Video,
   AlertTriangle,
-  Crosshair,
   BarChart3,
   Shield,
   X,
@@ -44,7 +43,6 @@ const primaryNavItems: NavItem[] = [
 // Supporting tools — real, working features that aren't part of the 6
 // primary sections a first-time viewer needs, kept one tap away.
 const secondaryNavItems: NavItem[] = [
-  { label: 'Zones', to: '/zones', icon: Crosshair },
   { label: 'Watchlist', to: '/watchlist', icon: User },
   { label: 'Analytics', to: '/analytics', icon: BarChart3 },
   { label: 'System Health', to: '/settings', icon: Server },
