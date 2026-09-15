@@ -76,7 +76,7 @@ from face.face_recognizer import FaceRecognizer
 from face.watchlist import WatchlistDB, WatchlistMatcher
 from filtering.false_alarm import FalseAlarmFilter
 from integration.syslog_notifier import SyslogNotifier
-from integration.runtime_state import PipelinePublisher
+from integration.runtime_state import PipelinePublisher, read_health
 from integration.webhook import WebhookNotifier
 from intelligence.loiter import LoiterTracker
 from intelligence.threat_rules import ThreatRulesDB
@@ -306,6 +306,19 @@ def main() -> None:
     validator = StartupValidator()
     if not validator.print_summary():
         log.error("Critical startup checks failed - aborting")
+        sys.exit(1)
+
+    # A second instance can't open a webcam the first one already holds - it
+    # just retries forever and the dashboard shows that camera stuck on
+    # "Connecting to camera..." with no explanation why. Refuse up front
+    # instead, since the running PID is right there in the health file.
+    existing = read_health()
+    if existing and existing.get("running") and existing.get("pid") != os.getpid():
+        log.error(
+            "Another IBVAP pipeline is already running (pid %s, last heartbeat %.1fs ago) "
+            "and holds the camera(s) - stop it first (kill %s) before starting a new one.",
+            existing.get("pid"), existing.get("ageSeconds", 0), existing.get("pid"),
+        )
         sys.exit(1)
 
     if os.getenv("DEMO_MODE", "false").strip().lower() in ("true", "1", "yes"):

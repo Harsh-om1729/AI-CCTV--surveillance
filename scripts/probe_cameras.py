@@ -39,11 +39,13 @@ def probe(source) -> bool:
     # A live RTSP feed commonly drops its first reads while the H.264 decoder
     # waits for a keyframe, so judge on several attempts, not the first one.
     got = 0
+    last_good = None
     started = time.perf_counter()
     for _ in range(WARMUP_FRAMES):
         ok, frame = cap.read()
         if ok and frame is not None:
             got += 1
+            last_good = frame
     elapsed = time.perf_counter() - started
 
     if got == 0:
@@ -51,7 +53,7 @@ def probe(source) -> bool:
         cap.release()
         return False
 
-    h, w = frame.shape[:2]
+    h, w = last_good.shape[:2]
     reported = cap.get(cv2.CAP_PROP_FPS)
     measured = got / elapsed if elapsed > 0 else 0.0
     print(
