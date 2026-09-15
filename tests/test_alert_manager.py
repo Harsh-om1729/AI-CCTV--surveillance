@@ -45,146 +45,197 @@ class RecordingAlertManager(AlertManager):
         self.snapshot_calls.append((tier, track_key, len(frames)))
 
 
+class Clock:
+    """A controllable fake clock — confirmation is now keyed on real elapsed
+    seconds (not a count of scoring cycles), so tests that exercise it must
+    control time explicitly rather than relying on back-to-back calls being
+    "instant"."""
+
+    def __init__(self, t: float = 0.0):
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> float:
+        self.t += seconds
+        return self.t
+
+
 class TestAlertManager(unittest.TestCase):
     def _manager(self, **kwargs) -> RecordingAlertManager:
         tmp_dir = tempfile.mkdtemp()
         return RecordingAlertManager(snapshot_dir=str(Path(tmp_dir) / "snapshots"), **kwargs)
 
     @staticmethod
-    def _observe(mgr, det, tier, times=1, frames=("f",)):
-        """Feeds `times` scoring cycles at one tier. Phase 18 confirmation means
-        a single observation is deliberately not enough to alert, so tests state
-        how many cycles they are simulating rather than calling handle() once."""
-        for _ in range(times):
-            mgr.handle(det, make_score(tier), recent_frames=list(frames))
+    def _confirm(mgr, det, tier, clock, frames=("f",)):
+        """Feeds two observations spaced a full confirm_seconds apart — the
+        minimum real-time pattern that confirms a tier (see _confirmed_tier):
+        the window must span at least confirm_seconds before any candidate is
+        even considered."""
+        mgr.handle(det, make_score(tier), recent_frames=list(frames))
+        clock.advance(mgr.confirm_seconds)
+        mgr.handle(det, make_score(tier), recent_frames=list(frames))
 
     # --- tier behaviour -------------------------------------------------
 
     def test_green_never_plays_or_snapshots(self):
-        mgr = self._manager()
+        clock = Clock()
+        mgr = self._manager(now_fn=clock)
         det = make_detection()
-        self._observe(mgr, det, "green", times=5)
+        for _ in range(5):
+            clock.advance(1.0)
+            mgr.handle(det, make_score("green"), recent_frames=["f"])
         self.assertEqual(mgr.play_calls, [])
         self.assertEqual(mgr.snapshot_calls, [])
 
     def test_confirmed_yellow_plays_and_snapshots_once_frame(self):
-        mgr = self._manager()
+        clock = Clock()
+        mgr = self._manager(confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
-        self._observe(mgr, det, "yellow", times=2, frames=("f1", "f2", "f3"))
+        self._confirm(mgr, det, "yellow", clock, frames=("f1", "f2", "f3"))
         self.assertEqual(len(mgr.play_calls), 1)
         self.assertEqual(mgr.snapshot_calls, [("yellow", 1, 1)])  # only the latest frame
 
     def test_confirmed_red_plays_and_snapshots_full_burst(self):
-        mgr = self._manager()
+        clock = Clock()
+        mgr = self._manager(confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
-        self._observe(mgr, det, "red", times=2, frames=("f1", "f2", "f3"))
+        self._confirm(mgr, det, "red", clock, frames=("f1", "f2", "f3"))
         self.assertEqual(len(mgr.play_calls), 1)
         self.assertEqual(mgr.snapshot_calls, [("red", 1, 3)])  # all buffered frames
 
-    # --- Phase 18: N-of-M confirmation ----------------------------------
+    # --- Phase 18: sustained-presence confirmation -----------------------
 
     def test_single_observation_does_not_alert(self):
         """The core of Phase 18: one borderline frame — a face similarity
-        landing on 0.50 — must not be able to start an incident."""
+        landing on 0.50 — must not be able to start an incident, no matter
+        how the clock is set up (a window of one sample has zero span)."""
         mgr = self._manager()
         det = make_detection()
-        self._observe(mgr, det, "red", times=1)
+        mgr.handle(det, make_score("red"), recent_frames=["f"])
         self.assertEqual(mgr.play_calls, [])
         self.assertEqual(mgr.snapshot_calls, [])
 
-    def test_confirmation_threshold_is_configurable(self):
-        mgr = self._manager(confirm_n=3, confirm_window=4)
+    def test_confirmation_needs_the_full_window_of_real_time(self):
+        """A second observation short of confirm_seconds must not confirm —
+        only once the window actually spans confirm_seconds does it count."""
+        clock = Clock()
+        mgr = self._manager(confirm_seconds=2.0, now_fn=clock)
         det = make_detection()
-        self._observe(mgr, det, "red", times=2)
-        self.assertEqual(mgr.play_calls, [], "2 of 4 should not confirm when N=3")
-        self._observe(mgr, det, "red", times=1)
+
+        mgr.handle(det, make_score("red"), recent_frames=["f"])
+        clock.advance(1.0)  # only half of confirm_seconds has elapsed
+        mgr.handle(det, make_score("red"), recent_frames=["f"])
+        self.assertEqual(mgr.play_calls, [], "1s of 2s required must not confirm")
+
+        clock.advance(1.0)  # now 2.0s span since the first observation
+        mgr.handle(det, make_score("red"), recent_frames=["f"])
         self.assertEqual(len(mgr.play_calls), 1)
 
-    def test_confirm_n_above_window_is_rejected(self):
-        """A window that can never reach N would silence the system entirely —
-        fail loudly at construction rather than at 2am on a border post."""
+    def test_confirm_seconds_is_configurable(self):
+        clock = Clock()
+        mgr = self._manager(confirm_seconds=0.2, now_fn=clock)
+        det = make_detection()
+        self._confirm(mgr, det, "red", clock)
+        self.assertEqual(len(mgr.play_calls), 1)
+
+    def test_negative_confirm_seconds_is_rejected(self):
+        """A negative window makes no sense — fail loudly at construction
+        rather than at 2am on a border post."""
         with self.assertRaises(ValueError):
-            self._manager(confirm_n=4, confirm_window=3)
+            self._manager(confirm_seconds=-1.0)
 
-    # --- Phase 18: hysteresis -------------------------------------------
-
-    def test_flapping_score_does_not_buy_repeated_alerts(self):
-        """Regression test for the observed failure: a watchlist similarity
-        oscillating around its 0.50 threshold flipped the tier green<->red
-        several times a second. Each re-escalation bypassed the cooldown by
-        design, producing nine Red alerts for one stationary person in 52
-        seconds. With hysteresis the flapping confirms Red once and then stays
-        confirmed, so the cooldown actually governs."""
-        clock = {"t": 0.0}
-        mgr = self._manager(cooldown_seconds=100.0, now_fn=lambda: clock["t"])
+    def test_borderline_flapping_signal_still_confirms_once(self):
+        """A signal genuinely oscillating between two tiers (e.g. a watchlist
+        similarity landing right on its threshold, flipping red/green every
+        frame) must not be read as "never sustained" and go silent forever —
+        elevated at least half the time over the window is enough to confirm
+        it once, matching the default confirm_fraction=0.5."""
+        clock = Clock()
+        mgr = self._manager(cooldown_seconds=100.0, confirm_seconds=1.5, now_fn=clock)
         det = make_detection()
 
         for i in range(20):
-            clock["t"] = i * 0.1  # ~10fps of flapping, all inside one cooldown
-            self._observe(mgr, det, "red" if i % 2 == 0 else "green")
+            clock.t = i * 0.1  # ~10fps of flapping, all inside one cooldown
+            mgr.handle(det, make_score("red" if i % 2 == 0 else "green"), recent_frames=["f"])
 
         self.assertEqual(
             len(mgr.play_calls), 1,
             f"flapping produced {len(mgr.play_calls)} alerts; expected exactly one",
         )
 
-    def test_tier_releases_only_after_full_window_below_it(self):
-        mgr = self._manager(cooldown_seconds=100.0)
+    # --- Phase 18: hysteresis -------------------------------------------
+
+    def test_tier_releases_only_after_sustained_time_below_it(self):
+        clock = Clock()
+        mgr = self._manager(cooldown_seconds=100.0, confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
 
-        self._observe(mgr, det, "red", times=2)      # confirmed red
+        self._confirm(mgr, det, "red", clock)  # confirmed red
         self.assertEqual(mgr._last_tier[1], "red")
 
-        self._observe(mgr, det, "green", times=2)    # window not yet all-green
-        self.assertEqual(mgr._last_tier[1], "red", "partial window must not release")
+        clock.advance(0.1)
+        mgr.handle(det, make_score("green"), recent_frames=["f"])  # just started dipping
+        self.assertEqual(mgr._last_tier[1], "red", "a brief dip must not release immediately")
 
-        self._observe(mgr, det, "green", times=1)    # now all three are green
+        # Sustained green, sampled densely - as the real per-frame pipeline
+        # would - until the window is entirely green and spans confirm_seconds.
+        for _ in range(15):
+            clock.advance(0.1)
+            mgr.handle(det, make_score("green"), recent_frames=["f"])
         self.assertEqual(mgr._last_tier[1], "green")
 
     def test_confirmed_escalation_alerts_inside_cooldown(self):
         """Escalation still bypasses the cooldown — but only once the higher
-        tier is confirmed, which is the whole point of confirming it."""
-        clock = {"t": 0.0}
-        mgr = self._manager(cooldown_seconds=100.0, now_fn=lambda: clock["t"])
+        tier is *itself* sustained for confirm_seconds, not merely because
+        the track has existed that long (a stale lower-tier sample sitting
+        in the window must not let one new higher-tier frame confirm it)."""
+        clock = Clock()
+        mgr = self._manager(cooldown_seconds=100.0, confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
 
-        self._observe(mgr, det, "yellow", times=2)
+        self._confirm(mgr, det, "yellow", clock)
         self.assertEqual(len(mgr.play_calls), 1)
 
-        clock["t"] = 1.0  # well within cooldown, but escalating yellow -> red
-        self._observe(mgr, det, "red", times=2)
+        clock.advance(0.1)  # well within cooldown, but escalating yellow -> red
+        mgr.handle(det, make_score("red"), recent_frames=["f"])
+        self.assertEqual(len(mgr.play_calls), 1, "one red frame must not confirm off a stale yellow window")
+
+        clock.advance(1.0)  # red now sustained for a full confirm_seconds
+        mgr.handle(det, make_score("red"), recent_frames=["f"])
         self.assertEqual(len(mgr.play_calls), 2)
 
     # --- Phase 18: backoff ----------------------------------------------
 
     def test_same_tier_within_cooldown_does_not_re_alert(self):
-        clock = {"t": 0.0}
-        mgr = self._manager(cooldown_seconds=10.0, now_fn=lambda: clock["t"])
+        clock = Clock()
+        mgr = self._manager(cooldown_seconds=10.0, confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
 
-        self._observe(mgr, det, "yellow", times=2)
-        clock["t"] = 2.0  # within cooldown, same tier
-        self._observe(mgr, det, "yellow", times=2)
+        self._confirm(mgr, det, "yellow", clock)
+        clock.advance(2.0)  # within cooldown, same tier
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])
 
         self.assertEqual(len(mgr.play_calls), 1)  # second call suppressed
 
     def test_repeat_cooldown_doubles_each_time(self):
-        clock = {"t": 0.0}
+        clock = Clock()
         mgr = self._manager(cooldown_seconds=10.0, max_cooldown_seconds=1000.0,
-                            now_fn=lambda: clock["t"])
+                             confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
 
-        self._observe(mgr, det, "yellow", times=2)          # alert 1 at t=0
-        clock["t"] = 10.0
-        self._observe(mgr, det, "yellow", times=1)          # alert 2 — 10s elapsed
+        self._confirm(mgr, det, "yellow", clock)          # alert 1
+        clock.t = 10.0 + mgr.confirm_seconds
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])  # alert 2 — 10s elapsed
         self.assertEqual(len(mgr.play_calls), 2)
 
-        clock["t"] = 25.0                                    # only 15s since alert 2
-        self._observe(mgr, det, "yellow", times=1)
+        clock.t += 15.0                                    # only 15s since alert 2
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])
         self.assertEqual(len(mgr.play_calls), 2, "second repeat must wait 20s, not 10s")
 
-        clock["t"] = 30.0                                    # 20s since alert 2
-        self._observe(mgr, det, "yellow", times=1)
+        clock.t += 5.0                                      # 20s since alert 2
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])
         self.assertEqual(len(mgr.play_calls), 3)
 
     def test_backoff_is_capped(self):
@@ -193,37 +244,40 @@ class TestAlertManager(unittest.TestCase):
         self.assertEqual(mgr._effective_cooldown(1), 15.0)
 
     def test_escalation_resets_backoff(self):
-        clock = {"t": 0.0}
-        mgr = self._manager(cooldown_seconds=10.0, now_fn=lambda: clock["t"])
+        clock = Clock()
+        mgr = self._manager(cooldown_seconds=10.0, confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
 
-        self._observe(mgr, det, "yellow", times=2)
-        clock["t"] = 10.0
-        self._observe(mgr, det, "yellow", times=1)  # repeat -> backoff now 20s
+        self._confirm(mgr, det, "yellow", clock)
+        clock.t = 10.0 + mgr.confirm_seconds
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])  # repeat -> backoff now 20s
         self.assertEqual(mgr._repeats[1], 1)
 
-        clock["t"] = 11.0
-        self._observe(mgr, det, "red", times=2)     # new confirmed tier
+        clock.advance(1.0)
+        mgr.handle(det, make_score("red"), recent_frames=["f"])
+        clock.advance(1.0)
+        mgr.handle(det, make_score("red"), recent_frames=["f"])  # new confirmed tier
         self.assertEqual(mgr._repeats[1], 0)
         self.assertEqual(len(mgr.play_calls), 3)
 
     # --- bookkeeping -----------------------------------------------------
 
     def test_different_tracks_alert_independently(self):
-        clock = {"t": 0.0}
-        mgr = self._manager(cooldown_seconds=100.0, now_fn=lambda: clock["t"])
+        clock = Clock()
+        mgr = self._manager(cooldown_seconds=100.0, confirm_seconds=1.0, now_fn=clock)
         det_a = make_detection(track_id=1, person_id=1)
         det_b = make_detection(track_id=2, person_id=2)
 
-        self._observe(mgr, det_a, "yellow", times=2)
-        self._observe(mgr, det_b, "yellow", times=2)
+        self._confirm(mgr, det_a, "yellow", clock)
+        self._confirm(mgr, det_b, "yellow", clock)
 
         self.assertEqual(len(mgr.play_calls), 2)
 
     def test_forget_clears_per_track_state(self):
-        mgr = self._manager()
+        clock = Clock()
+        mgr = self._manager(confirm_seconds=1.0, now_fn=clock)
         det = make_detection()
-        self._observe(mgr, det, "red", times=2)
+        self._confirm(mgr, det, "red", clock)
         self.assertIn(1, mgr._history)
 
         mgr.forget(1)
@@ -242,39 +296,47 @@ class TestIdentityResolutionDoesNotDuplicateAlerts(unittest.TestCase):
         tmp_dir = tempfile.mkdtemp()
         return RecordingAlertManager(snapshot_dir=str(Path(tmp_dir) / "snapshots"), **kwargs)
 
-    @staticmethod
-    def _observe(mgr, det, tier, times=1, frames=("f",)):
-        for _ in range(times):
-            mgr.handle(det, make_score(tier), recent_frames=list(frames))
-
     def test_first_identity_resolution_carries_state_forward(self):
-        mgr = self._manager()
+        clock = Clock()
+        mgr = self._manager(confirm_seconds=1.0, now_fn=clock)
         det = make_detection(track_id=8, person_id=None)
-        self._observe(mgr, det, "yellow", times=2)  # confirms + fires once as "T8"
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])
+        clock.advance(1.0)
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])  # confirms + fires once as "T8"
         self.assertEqual(len(mgr.play_calls), 1)
 
         det.person_id = 2  # Re-ID resolves mid-presence - same physical person
+        clock.advance(0.1)
         # Without the fix this reconfirms yellow from a blank history within
         # these two calls and fires again as "#2".
-        self._observe(mgr, det, "yellow", times=2)
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])
+        clock.advance(1.0)
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])
         self.assertEqual(
             len(mgr.play_calls), 1,
             "same physical person must not re-alert just because their key changed",
         )
 
     def test_reacquiring_an_already_known_person_keeps_their_state(self):
-        mgr = self._manager()
+        clock = Clock()
+        mgr = self._manager(confirm_seconds=1.0, now_fn=clock)
         det_known = make_detection(track_id=1, person_id=2)
-        self._observe(mgr, det_known, "yellow", times=2)
+        mgr.handle(det_known, make_score("yellow"), recent_frames=["f"])
+        clock.advance(1.0)
+        mgr.handle(det_known, make_score("yellow"), recent_frames=["f"])
         self.assertEqual(len(mgr.play_calls), 1)
 
         # A different, brand-new track starts unresolved...
+        clock.advance(0.1)
         det_new = make_detection(track_id=50, person_id=None)
         mgr.handle(det_new, make_score("red"), recent_frames=["f"])
         # ...then immediately resolves to the SAME already-known person - the
         # temporary track_id=50 state must be dropped, not overwrite #2's.
         det_new.person_id = 2
-        self._observe(mgr, det_new, "yellow", times=2)
+        clock.advance(0.1)
+        mgr.handle(det_new, make_score("yellow"), recent_frames=["f"])
+        clock.advance(1.0)
+        mgr.handle(det_new, make_score("yellow"), recent_frames=["f"])
         self.assertEqual(
             len(mgr.play_calls), 1,
             "an established person's cooldown must survive being re-acquired under a new track_id",
@@ -283,9 +345,9 @@ class TestIdentityResolutionDoesNotDuplicateAlerts(unittest.TestCase):
     def test_key_for_track_id_is_purged_with_its_state(self):
         # state_ttl_seconds is floored at cooldown_seconds, so both must be
         # tiny for the sleep below to actually cross the eviction threshold.
-        mgr = self._manager(cooldown_seconds=0.01, state_ttl_seconds=0.01)
+        mgr = self._manager(cooldown_seconds=0.01, state_ttl_seconds=0.01, confirm_seconds=0.0)
         det = make_detection(track_id=8, person_id=None)
-        self._observe(mgr, det, "yellow", times=2)
+        mgr.handle(det, make_score("yellow"), recent_frames=["f"])
         det.person_id = 2
         mgr.handle(det, make_score("yellow"), recent_frames=["f"])
         self.assertIn(8, mgr._key_for_track_id)
@@ -307,14 +369,14 @@ class TestAlertStateIsBounded(unittest.TestCase):
 
     def _manager(self, **kwargs) -> RecordingAlertManager:
         tmp_dir = tempfile.mkdtemp()
-        # confirm_n=1 unless a test asks otherwise. These cases are about TTL,
-        # eviction and cooldown; the Phase 18 confirmation window (default
-        # confirm_n=2) is a separate behaviour with its own tests below. Left
-        # at the default it silently changes what these measure — a single
-        # detection would no longer alert, so "one alert" assertions would
-        # read zero and the bounded-growth cases would stop exercising the
-        # alerting path they exist to bound.
-        kwargs.setdefault("confirm_n", 1)
+        # confirm_seconds=0 unless a test asks otherwise. These cases are
+        # about TTL, eviction and cooldown; the Phase 18 confirmation window
+        # (default confirm_seconds=1.5) is a separate behaviour with its own
+        # tests above. Left at the default it silently changes what these
+        # measure — a single detection would no longer alert, so "one alert"
+        # assertions would read zero and the bounded-growth cases would stop
+        # exercising the alerting path they exist to bound.
+        kwargs.setdefault("confirm_seconds", 0.0)
         return RecordingAlertManager(snapshot_dir=str(Path(tmp_dir) / "snapshots"), **kwargs)
 
     def test_state_ttl_is_never_shorter_than_the_cooldown(self):

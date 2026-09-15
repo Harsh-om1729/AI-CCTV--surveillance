@@ -20,21 +20,44 @@ class TrackHistory:
     seen within that window while leaving every active track's history intact.
     """
 
-    def __init__(self, history_len: int = 10, ttl_seconds: float = 30.0, now_fn=time.time):
+    def __init__(
+        self, history_len: int = 10, ttl_seconds: float = 30.0, now_fn=time.time,
+        speed_smoothing_alpha: float = 0.3,
+    ):
         self.history_len = history_len
         self.ttl_seconds = ttl_seconds
         self._now = now_fn
+        self.speed_smoothing_alpha = speed_smoothing_alpha
         self._history: dict[int, list[tuple[float, float]]] = {}
         self._last_seen: dict[int, float] = {}
+        self._speed_ema: dict[int, float] = {}
 
     def update(self, track_id: int, center: tuple[float, float]):
-        """Records `center` for `track_id`, returning its (direction, speed)."""
+        """Records `center` for `track_id`, returning its (direction, speed).
+
+        Speed is EMA-smoothed per track (not direction) before being
+        returned. The "stationary" vs "walking" boundary in the kinematics
+        U-curve (threat_rules.py) is only ~1px/frame wide, and ordinary
+        detection-box jitter on a person standing still is easily that
+        large - so the raw per-call speed flips across it frame to frame,
+        swinging kinematics_risk between 0 and max and flickering the
+        displayed tier green/yellow/red for someone who never actually
+        moved. Smoothing here (once, at the source) fixes every downstream
+        consumer (kinematics score, running override) without touching the
+        U-curve thresholds themselves.
+        """
         history = self._history.setdefault(track_id, [])
         history.append(center)
         if len(history) > self.history_len:
             history.pop(0)
         self._last_seen[track_id] = self._now()
-        return self.compute_direction_and_speed(history)
+        direction, raw_speed = self.compute_direction_and_speed(history)
+        if direction is None:
+            return direction, raw_speed
+        prev = self._speed_ema.get(track_id)
+        smoothed = raw_speed if prev is None else prev + self.speed_smoothing_alpha * (raw_speed - prev)
+        self._speed_ema[track_id] = smoothed
+        return direction, smoothed
 
     def purge_stale(self, now: float | None = None) -> int:
         """Drops tracks not updated within the TTL; returns how many went.
@@ -47,6 +70,7 @@ class TrackHistory:
         for track_id in stale:
             self._history.pop(track_id, None)
             self._last_seen.pop(track_id, None)
+            self._speed_ema.pop(track_id, None)
         if stale:
             log.debug("Dropped history for %d stale track(s)", len(stale))
         return len(stale)

@@ -885,7 +885,9 @@ def _video_camera_id(filename: str) -> str:
     """cam_id used in CAMERA_SOURCES for this file. Prefixed with replay_ so
     it can never collide with a real .env camera like cam0/cam1."""
     stem = os.path.splitext(filename)[0]
-    slug = re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_") or "clip"
+    # Preserve '-' vs '_' distinctly (both survive _sanitize_video_filename)
+    # so two differently-named uploads never fold onto the same cam_id.
+    slug = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-") or "clip"
     return f"replay_{slug}"
 
 
@@ -949,7 +951,11 @@ def v1_videos(_: None = Depends(require_token)) -> list:
             "sizeBytes": os.path.getsize(path),
             "uploadedAt": datetime.fromtimestamp(os.path.getmtime(path)).isoformat(),
             "isActive": is_active,
-            "needsRestart": is_active and not _pipeline_owns(cam_id),
+            # Flag a restart whenever .env's desired state (is_active) and
+            # the actually-running pipeline's ownership disagree in either
+            # direction: activated-but-not-picked-up, or deactivated-but-
+            # still-running (the pipeline keeps analyzing it until restarted).
+            "needsRestart": is_active != _pipeline_owns(cam_id),
         })
     return out
 

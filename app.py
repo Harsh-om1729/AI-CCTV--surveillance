@@ -39,8 +39,8 @@ from alerts.dispatch import AlertDispatcher
 from camera.health import CameraErrorIsolator, CameraHealth
 from camera.stream_manager import StreamManager
 from config.settings import (
-    ALERT_CONFIRM_N,
-    ALERT_CONFIRM_WINDOW,
+    ALERT_CONFIRM_FRACTION,
+    ALERT_CONFIRM_SECONDS,
     ALERT_COOLDOWN_SECONDS,
     ALERT_MAX_COOLDOWN_SECONDS,
     ALERT_DISPATCH_QUEUE_SIZE,
@@ -233,7 +233,10 @@ def draw_threat_score_overlay(
     # ThreatScorer._running_override. Give it a visual treatment a sentry
     # can't miss at a glance rather than just another line of text: a heavy
     # dark outline around them and a zoomed-in inset in a frame corner.
-    if score.override_reason is not None and "running" in score.override_reason:
+    # Only when the tier actually landed on red - a tier_ceiling can pull an
+    # override back down to yellow, and the heavy "still running" treatment
+    # should agree with the real, possibly-capped severity, not the raw override.
+    if score.tier == "red" and score.override_reason is not None and "running" in score.override_reason:
         _draw_running_high_alert(frame, det.box, alert_slot)
 
     return score
@@ -301,7 +304,9 @@ def _draw_running_high_alert(frame, box, slot: int = 0) -> None:
 def main() -> None:
     log.info("IBVAP starting up")
     validator = StartupValidator()
-    validator.print_summary()
+    if not validator.print_summary():
+        log.error("Critical startup checks failed - aborting")
+        sys.exit(1)
 
     if os.getenv("DEMO_MODE", "false").strip().lower() in ("true", "1", "yes"):
         log.info("DEMO_MODE=true active: running deterministic 15-step demonstration")
@@ -379,8 +384,8 @@ def main() -> None:
     alert_dispatcher = AlertDispatcher(maxsize=ALERT_DISPATCH_QUEUE_SIZE)
     alert_manager = AlertManager(
         cooldown_seconds=ALERT_COOLDOWN_SECONDS,
-        confirm_n=ALERT_CONFIRM_N,
-        confirm_window=ALERT_CONFIRM_WINDOW,
+        confirm_seconds=ALERT_CONFIRM_SECONDS,
+        confirm_fraction=ALERT_CONFIRM_FRACTION,
         max_cooldown_seconds=ALERT_MAX_COOLDOWN_SECONDS,
         incident_store=incident_store,
         webhook=webhook,
@@ -545,7 +550,7 @@ def main() -> None:
                 processed, det, threat_scorer, dwell, group_count,
                 alert_slot=running_alert_slot, fps=fps_ema[name],
             )
-            if score.override_reason is not None and "running" in score.override_reason:
+            if score.tier == "red" and score.override_reason is not None and "running" in score.override_reason:
                 # Next runner in this frame (if any) gets its own zoom inset
                 # stacked below this one instead of drawing on top of it.
                 running_alert_slot += 1

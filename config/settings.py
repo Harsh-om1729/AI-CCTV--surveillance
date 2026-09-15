@@ -205,12 +205,18 @@ ALERT_COOLDOWN_SECONDS = float(os.getenv("ALERT_COOLDOWN_SECONDS", "8"))
 # Bounded queue for off-thread alert side effects (webhook + evidence).
 ALERT_DISPATCH_QUEUE_SIZE = int(os.getenv("ALERT_DISPATCH_QUEUE_SIZE", "64"))
 
-# Phase 18 (alert discipline): a tier must be observed ALERT_CONFIRM_N times in
-# the last ALERT_CONFIRM_WINDOW scoring cycles before it can raise an alert, and
-# is only released once the whole window sits below it. This is what stops a
-# score oscillating around a threshold from buying a free siren on every swing.
-ALERT_CONFIRM_N = int(os.getenv("ALERT_CONFIRM_N", "2"))
-ALERT_CONFIRM_WINDOW = int(os.getenv("ALERT_CONFIRM_WINDOW", "3"))
+# Phase 18 (alert discipline): a tier must be observed for at least this many
+# REAL SECONDS (not scoring cycles - at 15-30fps a handful of frames is well
+# under a second) before it can raise an alert, and is only released once it
+# has sat continuously below that tier for the same duration. This is what
+# stops a score oscillating around a threshold - or a person merely passing
+# through a zone for an instant - from buying a free siren.
+ALERT_CONFIRM_SECONDS = float(os.getenv("ALERT_CONFIRM_SECONDS", "1.5"))
+# Fraction of the confirm-window's observations that must sit at or above a
+# candidate tier for it to confirm - 0.5 means "elevated at least half the
+# time over ALERT_CONFIRM_SECONDS", so a genuinely borderline/flapping signal
+# still confirms once instead of being read as "never sustained".
+ALERT_CONFIRM_FRACTION = float(os.getenv("ALERT_CONFIRM_FRACTION", "0.5"))
 
 # Repeat alerts for a track parked at the same tier back off 8s -> 16s -> 32s,
 # stopping at this ceiling, so a sustained presence is reported and then quiet.

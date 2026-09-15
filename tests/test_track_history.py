@@ -60,6 +60,46 @@ class TestDirectionAndSpeed(unittest.TestCase):
         self.assertEqual(len(history.history_for(7)), 2)
 
 
+class TestSpeedSmoothing(unittest.TestCase):
+    """A person standing still in front of the camera still gets a slightly
+    jittery detection box (YOLO box regression noise), which used to flip
+    the raw speed across the kinematics U-curve's ~1px-wide "stationary"
+    boundary every frame - swinging kinematics_risk between 0 and max and
+    flickering the displayed tier green/yellow/red for someone who never
+    moved. Speed is now EMA-smoothed per track to absorb that jitter."""
+
+    def test_jittering_but_stationary_track_has_damped_speed_swings(self):
+        history = TrackHistory()
+        # A person standing at (100, 100), with +/-2px alternating detection
+        # jitter each frame - well inside real YOLO box noise, and enough to
+        # cross the still (1.0) / walk_min (2.0) boundary on raw speed alone.
+        jitter_points = [
+            (100.0, 100.0), (102.0, 100.0), (100.0, 100.0), (102.0, 100.0),
+            (100.0, 100.0), (102.0, 100.0), (100.0, 100.0), (102.0, 100.0),
+        ]
+        speeds = [history.update(1, p)[1] for p in jitter_points]
+        # Raw (unsmoothed) speed here alternates between 0 and up to 2.0
+        # every frame - swinging clean across the still/walk_min boundary.
+        # The very first reading (index 1) has no prior EMA to smooth
+        # against - that one-time cold-start jump is expected. From the next
+        # reading on, smoothing must keep frame-to-frame swings well inside
+        # one band instead of bouncing clean across it every frame.
+        settled = speeds[2:]
+        swings = [abs(settled[i] - settled[i - 1]) for i in range(1, len(settled))]
+        self.assertLess(max(swings), 1.0, f"speed still swings sharply frame to frame: {speeds}")
+
+    def test_speed_still_responds_to_a_real_sustained_change(self):
+        """Smoothing must damp noise, not motion: a track that genuinely
+        starts moving fast must still read as fast, not stay stuck low."""
+        history = TrackHistory()
+        for x in range(10):
+            history.update(1, (float(x), 0.0))  # stationary
+        speed = 0.0
+        for x in range(10, 30):
+            _, speed = history.update(1, (float(x * 20), 0.0))  # sustained fast motion
+        self.assertGreater(speed, 15.0)
+
+
 class TestActiveTracksAreRetained(unittest.TestCase):
     def test_active_track_keeps_its_history_across_repeated_purges(self):
         clock = Clock()

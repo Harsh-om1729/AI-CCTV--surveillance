@@ -38,12 +38,18 @@ class AlertManager:
 
     Rate-limited per track, in three layers (Phase 18 — alert discipline):
 
-    1. N-of-M confirmation. A tier must be observed `confirm_n` times in the
-       last `confirm_window` scoring cycles before it is *confirmed*. A single
-       borderline frame — a face similarity landing on 0.50, one noisy speed
-       estimate — can no longer start an incident.
+    1. Sustained-presence confirmation. A tier must be observed continuously
+       for at least `confirm_seconds` of real elapsed time before it is
+       *confirmed* — not a count of scoring cycles, which at 15-30fps let a
+       single-digit number of *frames* (well under a second of real time)
+       confirm an alert. A single borderline frame — a face similarity
+       landing on 0.50, one noisy speed estimate — can no longer start an
+       incident, and neither can a person merely passing through a zone for
+       an instant.
     2. Hysteresis on the way down. A confirmed tier is only released once the
-       whole window sits below it. Without this, a score oscillating around a
+       observed tier has sat continuously below it for `confirm_seconds` too
+       — released to the highest tier actually observed during that dip, not
+       straight to green. Without this, a score oscillating around a
        threshold kept de-escalating and re-escalating, and since an escalation
        bypasses the cooldown by design, every oscillation bought a free siren:
        the observed failure was nine Red alerts for one stationary person in
@@ -67,21 +73,18 @@ class AlertManager:
         incident_store=None,
         webhook=None,
         syslog=None,
-        confirm_n: int = 2,
-        confirm_window: int = 3,
+        confirm_seconds: float = 1.5,
+        confirm_fraction: float = 0.5,
         max_cooldown_seconds: float = 64.0,
         state_ttl_seconds: float = 300.0,
         dispatcher=None,
     ):
-        if confirm_n > confirm_window:
-            raise ValueError(
-                f"confirm_n ({confirm_n}) cannot exceed confirm_window ({confirm_window}) "
-                "— no tier would ever confirm and the system would go silent"
-            )
+        if confirm_seconds < 0:
+            raise ValueError(f"confirm_seconds ({confirm_seconds}) cannot be negative")
         self.snapshot_dir = snapshot_dir
         self.cooldown_seconds = cooldown_seconds
-        self.confirm_n = confirm_n
-        self.confirm_window = confirm_window
+        self.confirm_seconds = confirm_seconds
+        self.confirm_fraction = confirm_fraction
         self.max_cooldown_seconds = max_cooldown_seconds
         self._now = now_fn
         self.incident_store = incident_store
@@ -105,6 +108,8 @@ class AlertManager:
         self.state_ttl_seconds = max(state_ttl_seconds, cooldown_seconds)
         self._last_tier: dict = {}
         self._last_alert_time: dict = {}
+        # track_key -> deque[(timestamp, observed_tier)], pruned to the
+        # trailing confirm_seconds - see _confirmed_tier.
         self._history: dict = {}
         self._repeats: dict = {}
         self._last_seen: dict = {}
@@ -137,7 +142,7 @@ class AlertManager:
         self._last_seen[track_key] = now
         self._purge_stale(now)
         prev_tier = self._last_tier.get(track_key, "green")
-        tier = self._confirmed_tier(track_key, score.tier)
+        tier = self._confirmed_tier(track_key, score.tier, now)
 
         det.previous_zone = prev_tier
         det.current_zone = tier
@@ -293,36 +298,70 @@ class AlertManager:
         if stale:
             log.debug("Evicted alert state for %d stale identit(ies)", len(stale))
 
-    def _confirmed_tier(self, track_key, observed_tier: str) -> str:
-        """N-of-M confirmation on the way up, full-window hysteresis on the way
-        down. Returns the tier the alerting logic should act on, which is not
-        necessarily the tier this single frame scored."""
-        history = self._history.setdefault(
-            track_key, deque(maxlen=self.confirm_window)
-        )
-        history.append(observed_tier)
+    def _confirmed_tier(self, track_key, observed_tier: str, now: float) -> str:
+        """Time-based confirmation on the way up, full-window hysteresis on
+        the way down. Returns the tier the alerting logic should act on,
+        which is not necessarily the tier this single frame scored.
+
+        The window is real elapsed seconds (confirm_seconds), not a count of
+        scoring cycles - at 15-30fps a handful of *frames* is well under a
+        second of real time, which is what let a person merely passing
+        through a zone, or a single noisy reading, confirm an alert almost
+        instantly.
+        """
+        history = self._history.setdefault(track_key, deque())
+        history.append((now, observed_tier))
+        # Retained a bit past confirm_seconds itself (not pruned right at
+        # it): the span check below needs the window able to actually reach
+        # a full confirm_seconds. Pruning at exactly that boundary is
+        # self-defeating under steady, evenly-spaced sampling (e.g. a fixed
+        # fps) - the oldest sample that would push span to confirm_seconds is
+        # always exactly the one being evicted, so span asymptotes just
+        # under confirm_seconds and never reaches it.
+        retain_seconds = self.confirm_seconds * 1.5
+        while history and now - history[0][0] > retain_seconds:
+            history.popleft()
         confirmed = self._last_tier.get(track_key, "green")
 
-        # Up: any tier above the confirmed one that has reached N observations
-        # in the window. Highest such tier wins, so a burst of Red is not
-        # masked by the Yellows around it.
-        for candidate in ("red", "yellow"):
-            if self.TIER_RANK[candidate] <= self.TIER_RANK[confirmed]:
-                break
-            if history.count(candidate) >= self.confirm_n:
-                self._last_tier[track_key] = candidate
-                return candidate
+        # The window must span at least confirm_seconds of real time before
+        # it can be trusted - not just "enough samples happen to be in it".
+        # This only works because the window is cleared below on every actual
+        # tier change: without that, a track already confirmed Yellow for a
+        # while that then turns Red would keep one stale Yellow sample
+        # sitting next to the first new Red one, and a window of exactly
+        # those two is already >=50% "at or above Red" - confirming Red off
+        # a single fresh frame. Clearing means the window confirming the
+        # *next* tier only ever contains evidence gathered since the last
+        # change, so reaching confirm_seconds here means that much real time
+        # has passed with the candidate tier itself actually present.
+        span = now - history[0][0]
 
-        # Down: only once the window is full *and* every observation in it sits
-        # below the confirmed tier. A lone sub-threshold frame no longer drops
-        # the tier — which is what previously let the next frame re-escalate
-        # and bypass the cooldown.
-        if len(history) == self.confirm_window and all(
-            self.TIER_RANK[t] < self.TIER_RANK[confirmed] for t in history
-        ):
-            released = max(history, key=lambda t: self.TIER_RANK[t])
-            self._last_tier[track_key] = released
-            return released
+        if span >= self.confirm_seconds:
+            # Up: any tier above the confirmed one seen in at least
+            # confirm_fraction of the window. Highest such tier wins, so a
+            # burst of Red is not masked by the Yellows around it. A
+            # borderline signal genuinely oscillating (e.g. ~50/50 across the
+            # window) still confirms once, rather than being read as "never
+            # sustained" and going silent forever.
+            for candidate in ("red", "yellow"):
+                if self.TIER_RANK[candidate] <= self.TIER_RANK[confirmed]:
+                    continue
+                hits = sum(1 for _, t in history if self.TIER_RANK[t] >= self.TIER_RANK[candidate])
+                if hits >= len(history) * self.confirm_fraction:
+                    self._last_tier[track_key] = candidate
+                    history.clear()
+                    return candidate
+
+            # Down: only once *every* observation in the window sits below
+            # the confirmed tier - a lone sub-threshold frame no longer drops
+            # the tier, which is what previously let the next frame
+            # re-escalate and bypass the cooldown. Released to the highest
+            # tier actually seen during the dip, not straight to green.
+            if all(self.TIER_RANK[t] < self.TIER_RANK[confirmed] for _, t in history):
+                released = max((t for _, t in history), key=lambda t: self.TIER_RANK[t])
+                self._last_tier[track_key] = released
+                history.clear()
+                return released
 
         self._last_tier[track_key] = confirmed
         return confirmed
@@ -344,7 +383,10 @@ class AlertManager:
     def forget(self, track_key) -> None:
         """Drops all per-track state. Callers that retire tracks should use it;
         without it these dicts grow for the life of the process (Phase 20)."""
-        for state in (self._last_tier, self._last_alert_time, self._history, self._repeats):
+        for state in (
+            self._last_tier, self._last_alert_time, self._history,
+            self._repeats,
+        ):
             state.pop(track_key, None)
 
     def _play(self, sound) -> None:

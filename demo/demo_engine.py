@@ -86,8 +86,7 @@ class DemoEngine:
             snapshot_dir=self.evidence_dir,
             incident_store=self.store,
             cooldown_seconds=4.0,
-            confirm_n=1,  # In demo, confirm promptly on transition
-            confirm_window=2,
+            confirm_seconds=0.0,  # In demo, confirm promptly on transition
         )
 
         self.step_index = 0

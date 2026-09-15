@@ -21,6 +21,7 @@ class Zone:
         self.zone_type = zone_type  # "red" | "yellow" | "green"
         self.polygon = polygon  # list of (x, y) pixel points
         self.enabled = enabled  # disabled zones are kept (saved) but ignored by classify()
+        self._area = None  # lazily computed and cached by area()
 
     def contains(self, point: tuple) -> bool:
         """Evaluates whether point (x, y) lies inside or on the polygon contour."""
@@ -41,11 +42,17 @@ class Zone:
         """Polygon area in px^2, via cv2 (already used by contains()) — the
         specificity tiebreak for overlapping same-tier zones: a smaller,
         more specific zone wins over a larger one it happens to sit inside,
-        regardless of which was drawn/loaded first."""
+        regardless of which was drawn/loaded first. Cached: polygon is fixed
+        for the life of the Zone, and this is recomputed on every classify()
+        call for every overlapping same-tier zone in the live per-frame path."""
+        if self._area is not None:
+            return self._area
         if len(self.polygon) < 3:
-            return 0.0
-        contour = np.array(self.polygon, dtype=np.float32)
-        return abs(cv2.contourArea(contour))
+            self._area = 0.0
+        else:
+            contour = np.array(self.polygon, dtype=np.float32)
+            self._area = abs(cv2.contourArea(contour))
+        return self._area
 
     def to_dict(self) -> dict:
         return {"zone_type": self.zone_type, "polygon": self.polygon, "enabled": self.enabled}

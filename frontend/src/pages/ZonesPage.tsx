@@ -477,6 +477,15 @@ export const ZonesPage: React.FC = () => {
   };
 
   const handleSaveBoundariesProfile = async () => {
+    // PUT /boundaries replaces the whole per-camera map, so allBoundaries
+    // must actually reflect the backend's current state before we send it —
+    // otherwise this silently wipes every other camera's saved boundaries.
+    if (isBoundaryMock) {
+      setBoundarySaveError('Boundaries have not loaded from the backend yet — refusing to save and risk overwriting other cameras.');
+      showToast('Cannot save: boundaries not loaded from backend');
+      return;
+    }
+
     const grouped: Record<string, Boundary[]> = {};
     for (const cam of availableCameras) grouped[cam] = [];
     for (const b of allBoundaries) (grouped[b.cameraName] ||= []).push(b);
