@@ -21,6 +21,7 @@ class Detection:
         "direction",
         "speed",
         "person_id",
+        "last_camera",
         "zone_tier",
         "current_zone",
         "zone_direction",
@@ -47,6 +48,12 @@ class Detection:
         self.direction: tuple[float, float] | None = None  # (dx, dy) over recent history
         self.speed: float = 0.0  # pixels/frame over recent history
         self.person_id: int | None = None  # persistent identity from the Re-ID gallery
+        # Camera that most recently contributed a Re-ID template for this
+        # person_id — i.e. where this identity was last confirmed, which may
+        # be a *different* camera than the one that produced this detection
+        # when a cross-camera hand-off just happened. None until person_id
+        # resolves. Set by app.py, the only place with the gallery handle.
+        self.last_camera: str | None = None
         self.zone_tier: str | None = None  # "red" | "yellow" | "green" | "none"
         self.current_zone: str | None = None
 

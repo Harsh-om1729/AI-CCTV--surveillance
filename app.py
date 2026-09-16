@@ -63,6 +63,7 @@ from config.settings import (
     REID_MATCH_MARGIN,
     REID_MODEL_PATH,
     REID_SIMILARITY_THRESHOLD,
+    REID_TEMPLATE_BANK_SIZE,
     REID_TTL_SECONDS,
     SYSLOG_HOST,
     SYSLOG_PORT,
@@ -387,6 +388,7 @@ def main() -> None:
         similarity_threshold=REID_SIMILARITY_THRESHOLD,
         ttl_seconds=REID_TTL_SECONDS,
         match_margin=REID_MATCH_MARGIN,
+        bank_size=REID_TEMPLATE_BANK_SIZE,
     )
 
     def _zones_file(cam_name):
@@ -464,6 +466,14 @@ def main() -> None:
     # known identity/watchlist result instead of blanking it out.
     person_id_cache = {name: {} for name in CAMERA_SOURCES}
     watchlist_cache = {name: {} for name in CAMERA_SOURCES}
+    # Per-camera, per-track_id last-seen wall time backing the purge in
+    # _purge_track_caches(). Without it these two caches grow by one entry
+    # per track_id ever minted — ByteTrack ids are never reused — and never
+    # shrink, which over a long-running session is exactly the kind of slow
+    # leak that shows up as FPS quietly dropping rather than any one slow
+    # frame. TTL matches REID_TTL_SECONDS so an entry outlives the Re-ID
+    # gallery binding it was derived from.
+    track_cache_seen = {name: {} for name in CAMERA_SOURCES}
     # Per-camera, per-track "last seen running" timestamps backing the
     # running zoom-inset's hold window - see should_show_running_alert.
     running_alert_hold = {name: {} for name in CAMERA_SOURCES}
@@ -484,6 +494,21 @@ def main() -> None:
         "profile": HARDWARE_PROFILE,
         "providers": ", ".join(select_providers()),
     }
+
+    def _purge_track_caches(name: str, now: float) -> None:
+        """Evicts person_id_cache/watchlist_cache entries for track_ids that
+        haven't appeared in this camera's frames for REID_TTL_SECONDS.
+
+        Called once per processed frame. Cheap: the whole point is that the
+        caches stay bounded by "tracks currently on screen" instead of
+        "every track_id ever seen since the process started".
+        """
+        seen = track_cache_seen[name]
+        stale = [tid for tid, last in seen.items() if now - last > REID_TTL_SECONDS]
+        for tid in stale:
+            del seen[tid]
+            person_id_cache[name].pop(tid, None)
+            watchlist_cache[name].pop(tid, None)
 
     def process_camera_frame(name: str, frame) -> None:
         """The full per-camera pipeline for one frame.
@@ -538,6 +563,11 @@ def main() -> None:
         for det in detections:
             if det.track_id is not None and det.category() == "person":
                 track_id = det.track_id
+                # Touched every frame the track is on screen, whether or not
+                # this frame does a Re-ID/face recheck below — this is what
+                # _purge_track_caches() uses to tell an active track apart
+                # from one that walked off and is never coming back.
+                track_cache_seen[name][track_id] = now
                 # A brand-new track is checked every frame (Re-ID
                 # needs consecutive samples to decide an identity at
                 # all — resolve() returns None while still buffering,
@@ -555,6 +585,9 @@ def main() -> None:
                     person_id_cache[name][track_id] = det.person_id
                 else:
                     det.person_id = person_id_cache[name][track_id]
+
+                if det.person_id is not None:
+                    det.last_camera = person_gallery.last_camera(det.person_id)
 
                 if not already_resolved or due_for_check:
                     with profiler.stage("face_embed"):
@@ -596,6 +629,8 @@ def main() -> None:
                 crossings = boundary_engines[name].check_crossing(det.track_id, ground_point)
             if crossings:
                 camera_state[name]["boundaryEvents"].extend(crossings)
+
+        _purge_track_caches(name, now)
 
         draw_detections(processed, detections)
 

@@ -155,6 +155,14 @@ REID_SIMILARITY_THRESHOLD = float(os.getenv("REID_SIMILARITY_THRESHOLD", "0.70")
 # telling those people apart, so the gallery mints a new id rather than guess.
 REID_MATCH_MARGIN = float(os.getenv("REID_MATCH_MARGIN", "0.05"))
 
+# Re-ID: how many template embeddings the gallery keeps per identity (FIFO,
+# most recent wins) instead of one blended running average. A cross-camera
+# match only needs to beat the threshold against ONE stored template, so a
+# larger bank tolerates more appearance variation across cameras (angle,
+# lighting, distance) at the cost of a bit more memory per identity — a few
+# hundred bytes per extra template, nothing that matters at gallery scale.
+REID_TEMPLATE_BANK_SIZE = int(os.getenv("REID_TEMPLATE_BANK_SIZE", "5"))
+
 # Person Re-ID appearance model (OSNet x0.25 / MSMT17). Bundled in models/ and
 # never fetched at runtime, so air-gapped operation still works.
 REID_MODEL_PATH = os.getenv("REID_MODEL_PATH", "models/osnet_x0_25_msmt17.onnx")

@@ -24,6 +24,36 @@ _INPUT_WIDTH, _INPUT_HEIGHT = 128, 256
 DEFAULT_MODEL_PATH = "models/osnet_x0_25_msmt17.onnx"
 
 
+def _normalize_illumination(crop: np.ndarray) -> np.ndarray:
+    """Flattens out ambient-lighting differences on the crop itself, always,
+    regardless of what the caller's frame-level pipeline already did.
+
+    Why this exists: app.py's per-camera Preprocessor (preprocessing/enhance.py)
+    only applies CLAHE + gamma correction to a WHOLE FRAME when THAT camera's
+    OWN measured brightness drops below its threshold — and it feeds that same
+    conditionally-processed frame into this embedder. Two cameras watching the
+    same person a few seconds apart routinely disagree on whether their own
+    scene counted as "dark enough" to boost, so the same person's crop can
+    reach OSNet raw from one camera and gamma/CLAHE-corrected from another.
+    That is a real shift in feature space having nothing to do with identity,
+    and it is exactly the kind of gap a similarity threshold can fall into.
+    Applying a mild, ALWAYS-ON illumination normalization here — after the
+    frame-level pipeline, on the crop specifically — means every embedding
+    this class ever produces went through the same normalization, so ambient
+    brightness stops being a variable the Re-ID match has to survive.
+    """
+    lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+    # Mild by design: this always runs, including on crops the frame-level
+    # boost already corrected, so a strong clip limit would double-correct an
+    # already-boosted crop. 2.0/(4x4) is gentler than enhance.py's 3.0/(8x8),
+    # which only ever runs once per frame on genuinely dark scenes.
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+    l_channel = clahe.apply(l_channel)
+    lab = cv2.merge((l_channel, a_channel, b_channel))
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
 class OSNetEmbedder:
     """Person Re-ID appearance embedding: OSNet x0.25 trained on MSMT17.
 
@@ -71,6 +101,7 @@ class OSNetEmbedder:
             return None
 
         resized = cv2.resize(crop, (_INPUT_WIDTH, _INPUT_HEIGHT))
+        resized = _normalize_illumination(resized)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         tensor = (rgb.transpose(2, 0, 1).astype(np.float32) / 255.0 - _MEAN) / _STD
 

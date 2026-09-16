@@ -255,6 +255,143 @@ class TestCrossCameraReID(unittest.TestCase):
         self.assertEqual(person_on_cam0, person_on_cam1)
 
 
+class TestTemplateBank(unittest.TestCase):
+    """The gallery keeps several template embeddings per identity instead of
+    blending everything into one running average — a single blended vector
+    washes out exactly the pose/lighting/camera variation that matters for
+    cross-camera matching, which is why real footage across two cameras used
+    to fail to match even when it was clearly the same person."""
+
+    def test_a_query_matching_one_stale_template_would_miss_under_a_blended_average(self):
+        """Concrete proof the bank recovers matches a single blended average
+        would lose. With alpha-blending, one odd-looking sample (a bad-angle
+        recheck, e.g.) permanently drags the person's one reference vector
+        toward it — and stays dragged even once the camera moves on. Here:
+        cos(mean(v1, v2), v3) = 0.74 (below the 0.8 threshold — a blended
+        gallery would mint a new person_id and lose the identity), while
+        max(cos(v1, v3), cos(v2, v3)) = 0.998 (comfortably above it) because
+        v1 — this person's normal appearance — is still sitting in the bank
+        untouched by the one odd sample. Numbers reproducible with
+        reid/reid.py's cosine_similarity/l2_normalize on these three raw
+        colors (see the git history of this test for the derivation).
+        """
+        clock = {"t": 0.0}
+        gallery = PersonGallery(
+            embed_fn=fake_embed,
+            similarity_threshold=0.8,
+            ttl_seconds=30.0,
+            min_samples=3,
+            bank_size=5,
+            now_fn=lambda: clock["t"],
+        )
+        box = (100, 100, 160, 260)
+
+        v1_color = (0, 0, 220)     # this person's normal appearance
+        v2_color = (220, 180, 0)   # one odd-angle/lighting recheck sample
+        v3_color = (10, 5, 200)    # a later camera's sample — close to v1, not v2
+
+        person_id = resolve_until_decided(
+            gallery, ("cam1", 1), make_frame_with_patch(v1_color, box), box
+        )
+        # The initial resolution already seeded the bank with its 3 raw
+        # buffered v1 samples (not just their mean — see resolve()). One more
+        # recheck on the same still-live track adds v2 as a 4th template
+        # (this is what a REID_FACE_CHECK_INTERVAL recheck does) — it must
+        # not overwrite/blend away the earlier v1 templates.
+        clock["t"] = 1.0
+        gallery.resolve(("cam1", 1), make_frame_with_patch(v2_color, box), box)
+        self.assertEqual(len(gallery._gallery[person_id]["embeddings"]), 4)
+
+        clock["t"] = 10.0
+        matched_id = resolve_until_decided(
+            gallery, ("cam2", 9), make_frame_with_patch(v3_color, box), box
+        )
+
+        self.assertEqual(matched_id, person_id)
+
+    def test_bank_stays_bounded_at_bank_size(self):
+        clock = {"t": 0.0}
+        gallery = PersonGallery(
+            embed_fn=fake_embed,
+            similarity_threshold=0.8,
+            ttl_seconds=300.0,
+            min_samples=3,
+            bank_size=4,
+            now_fn=lambda: clock["t"],
+        )
+        box = (100, 100, 160, 260)
+        frame = make_frame_with_patch((0, 0, 220), box)
+
+        person_id = resolve_until_decided(gallery, ("cam1", 1), frame, box)
+        for i in range(20):
+            clock["t"] += 1.0
+            gallery.resolve(("cam1", 1), frame, box)
+
+        self.assertLessEqual(len(gallery._gallery[person_id]["embeddings"]), 4)
+
+    def test_last_camera_reflects_the_most_recently_seen_camera(self):
+        clock = {"t": 0.0}
+        gallery = PersonGallery(
+            embed_fn=fake_embed,
+            similarity_threshold=0.8,
+            ttl_seconds=30.0,
+            min_samples=3,
+            now_fn=lambda: clock["t"],
+        )
+        box = (100, 100, 160, 260)
+        frame = make_frame_with_patch((0, 0, 220), box)
+
+        person_id = resolve_until_decided(gallery, ("cam1", 1), frame, box)
+        self.assertEqual(gallery.last_camera(person_id), "cam1")
+
+        clock["t"] = 5.0
+        gallery.resolve(("cam1", 1), frame, box)
+        clock["t"] = 10.0
+        same_person = resolve_until_decided(gallery, ("cam2", 5), frame, box)
+
+        self.assertEqual(same_person, person_id)
+        self.assertEqual(gallery.last_camera(person_id), "cam2")
+
+    def test_last_camera_is_none_for_an_unknown_person_id(self):
+        gallery = PersonGallery(embed_fn=fake_embed)
+        self.assertIsNone(gallery.last_camera(999))
+
+    def test_decision_log_names_camera_local_track_similarity_and_outcome(self):
+        """Every resolve() decision must be traceable back to which camera,
+        which local ByteTrack id, what it scored, and what was decided —
+        otherwise a cross-camera mismatch in the field is undebuggable."""
+        clock = {"t": 0.0}
+        gallery = PersonGallery(
+            embed_fn=fake_embed, similarity_threshold=0.8, ttl_seconds=30.0,
+            min_samples=3, now_fn=lambda: clock["t"],
+        )
+        box = (100, 100, 160, 260)
+        frame = make_frame_with_patch((0, 0, 220), box)
+
+        with self.assertLogs("ibvap.reid", level="INFO") as captured:
+            person_id = resolve_until_decided(gallery, ("cam1", 7), frame, box)
+
+        summary_lines = [m for m in captured.output if "assigned new global id" in m]
+        self.assertEqual(len(summary_lines), 1)
+        line = summary_lines[0]
+        self.assertIn("camera=cam1", line)
+        self.assertIn("local_track=7", line)
+        self.assertIn(f"#{person_id}", line)
+
+        clock["t"] = 5.0
+        with self.assertLogs("ibvap.reid", level="INFO") as captured:
+            matched_id = resolve_until_decided(gallery, ("cam2", 3), frame, box)
+
+        reuse_lines = [m for m in captured.output if "REUSED existing id" in m]
+        self.assertEqual(len(reuse_lines), 1)
+        line = reuse_lines[0]
+        self.assertIn("camera=cam2", line)
+        self.assertIn("local_track=3", line)
+        self.assertIn(f"candidate=#{matched_id}", line)
+        self.assertIn("threshold=0.80", line)
+        self.assertRegex(line, r"similarity=\d\.\d\d")
+
+
 class TestPendingBufferIsBounded(unittest.TestCase):
     """Issue D: embeddings buffered for a track that vanishes before reaching
     min_samples used to stay in `_pending` for the life of the process. Every
