@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Menu, Clock, Volume2, VolumeX, BellOff, Sun, Moon } from 'lucide-react';
+import { Menu, Clock, Volume2, VolumeX, BellOff, Sun, Moon, Smartphone } from 'lucide-react';
 import { AlertBell } from './AlertBell';
 import { useAlerts } from '@/components/alerts/AlertProvider';
 import { useSystemHealth } from '@/components/system/SystemHealthProvider';
@@ -55,7 +55,17 @@ const routeTitles: Record<string, { title: string; subtitle: string }> = {
 };
 
 export const Topbar: React.FC<TopbarProps> = ({ onOpenMobileSidebar }) => {
-  const { backendStatus, soundEnabled, toggleSound, popupsMuted, toggleMutePopups } = useAlerts();
+  const {
+    backendStatus,
+    soundEnabled,
+    toggleSound,
+    popupsMuted,
+    toggleMutePopups,
+    pushEnabled,
+    pushPermission,
+    requestPushPermission,
+    disablePush,
+  } = useAlerts();
   const { cameras, health, reachable } = useSystemHealth();
   const { theme, toggleTheme } = useTheme();
   const liveCams = cameras.filter((c) => c.health === 'online' && c.source !== 'idle').length;
@@ -185,6 +195,51 @@ export const Topbar: React.FC<TopbarProps> = ({ onOpenMobileSidebar }) => {
             {popupsMuted ? 'Popups Muted' : 'Mute Popups'}
           </span>
         </button>
+
+        {/* Native Mobile/OS Push Notifications: off by default, opt-in only
+            (a permission prompt firing on page load with no user action is
+            a bad first impression and some browsers block it outright).
+            Hidden entirely when the API isn't available at all, rather than
+            shown disabled — nothing the operator can do about that here. */}
+        {pushPermission !== 'unsupported' && (
+          <button
+            onClick={() => {
+              if (pushPermission === 'denied') return;
+              if (pushEnabled) {
+                disablePush();
+              } else {
+                void requestPushPermission();
+              }
+            }}
+            aria-label={
+              pushPermission === 'denied'
+                ? 'Mobile alerts blocked in browser settings'
+                : pushEnabled
+                ? 'Disable mobile push alerts'
+                : 'Enable mobile push alerts'
+            }
+            disabled={pushPermission === 'denied'}
+            className={`px-2.5 py-1.5 rounded-xl transition-colors border flex items-center gap-1.5 ${
+              pushPermission === 'denied'
+                ? 'text-text-muted/50 border-transparent cursor-not-allowed'
+                : pushEnabled
+                ? 'text-accent-teal bg-accent-teal/10 border-accent-teal/30'
+                : 'text-text-muted hover:text-text-primary hover:bg-ink/[0.04] border-border-subtle'
+            }`}
+            title={
+              pushPermission === 'denied'
+                ? 'Blocked — re-enable notifications for this site in your browser settings'
+                : pushEnabled
+                ? 'Mobile Alerts: on — this device gets a lock-screen/notification-shade alert when the tab is backgrounded'
+                : 'Mobile Alerts: off — enable to get a lock-screen/notification-shade alert when this tab is backgrounded'
+            }
+          >
+            <Smartphone className="w-4 h-4" />
+            <span className="hidden md:inline text-[11px] font-mono font-medium">
+              {pushPermission === 'denied' ? 'Blocked' : pushEnabled ? 'Mobile Alerts On' : 'Mobile Alerts'}
+            </span>
+          </button>
+        )}
 
 
         {/* Alerts Notification Bell */}

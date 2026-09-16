@@ -48,7 +48,11 @@ export const AlertToastContainer: React.FC = () => {
   return (
     <div
       aria-live="assertive"
-      className="fixed top-20 right-4 sm:right-6 z-50 flex flex-col gap-2.5 max-w-xs sm:max-w-sm w-full pointer-events-none transition-all"
+      // Mobile: a full-width banner pinned near the top of the screen (the
+      // iOS-notification look) so it reads as a heads-up alert rather than a
+      // small corner toast that's easy to miss on a phone. Desktop keeps the
+      // original top-right corner stack.
+      className="fixed top-2 inset-x-2 sm:top-20 sm:inset-x-auto sm:right-6 z-50 flex flex-col gap-2.5 w-auto sm:max-w-sm sm:w-full pointer-events-none transition-all"
     >
       {activeToasts.map((toast) => {
         const isRed = toast.tier === 'red';
@@ -100,7 +104,7 @@ export const AlertToastContainer: React.FC = () => {
                 <button
                   onClick={toggleMutePopups}
                   title="Mute popup notifications (won't show on screen)"
-                  className="px-1.5 py-0.5 rounded text-text-dim hover:text-accent-yellow hover:bg-ink/[0.08] transition-colors flex items-center gap-1 text-[10px] font-mono border border-ink/10"
+                  className="px-2 py-1.5 sm:px-1.5 sm:py-0.5 rounded text-text-dim hover:text-accent-yellow hover:bg-ink/[0.08] transition-colors flex items-center gap-1 text-[10px] font-mono border border-ink/10"
                 >
                   <BellOff className="w-3 h-3" />
                   <span>Mute</span>
@@ -109,7 +113,7 @@ export const AlertToastContainer: React.FC = () => {
                 <button
                   onClick={() => dismissToast(toast.id)}
                   aria-label="Dismiss alert"
-                  className="p-1 rounded text-text-dim hover:text-text-primary hover:bg-ink/[0.08] transition-colors"
+                  className="p-2 sm:p-1 rounded text-text-dim hover:text-text-primary hover:bg-ink/[0.08] transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -159,7 +163,7 @@ export const AlertToastContainer: React.FC = () => {
                 variant="ghost"
                 size="sm"
                 onClick={() => acknowledgeAlert(toast.id)}
-                className="text-[11px] h-7 px-2.5 text-text-dim hover:text-text-primary"
+                className="text-[11px] h-9 sm:h-7 px-2.5 text-text-dim hover:text-text-primary"
               >
                 <CheckCircle2 className="w-3 h-3 mr-1" />
                 Acknowledge
@@ -171,7 +175,7 @@ export const AlertToastContainer: React.FC = () => {
                   acknowledgeAlert(toast.id);
                   navigate(`/detections?incident=${toast.id}`);
                 }}
-                className="text-[11px] h-7 px-2.5 font-semibold shadow-sm"
+                className="text-[11px] h-9 sm:h-7 px-2.5 font-semibold shadow-sm"
               >
                 <Eye className="w-3 h-3 mr-1" />
                 View Evidence

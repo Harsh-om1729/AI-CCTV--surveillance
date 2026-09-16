@@ -347,6 +347,7 @@ export const DashboardPage: React.FC = () => {
                           watchlistMatch={camWatchlistMatch}
                           isFocused={cam.id === selectedCamera?.id}
                           onToggleFocus={() => navigate(`/live?camera=${cam.id}`)}
+                          compact
                         />
                       </div>
                     );

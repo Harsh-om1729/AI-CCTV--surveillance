@@ -36,6 +36,11 @@ export interface CameraTileProps {
    * own once someone requests the stream again. */
   onStop?: () => void;
   className?: string;
+  /** Strips the overlay down to a name + health dot and FPS only — no
+   * source/activity/low-light badges, no label. For small thumbnail grids
+   * (e.g. DashboardPage's "Live Camera Feeds" preview) where the full badge
+   * stack has no room and ends up covering most of the actual picture. */
+  compact?: boolean;
 }
 
 const RETRY_MS = 4000;
@@ -62,6 +67,7 @@ export const CameraTile: React.FC<CameraTileProps> = ({
   onRemove,
   onStop,
   className,
+  compact = false,
 }) => {
   // Stream lifecycle. An MJPEG <img> fires onLoad on its first frame and
   // onError when the request fails (e.g. 409: the camera is held by another
@@ -235,31 +241,35 @@ export const CameraTile: React.FC<CameraTileProps> = ({
             <span className="font-mono text-xs font-bold text-white tracking-wider uppercase truncate min-w-0">
               {cameraName}
             </span>
-            {label && (
+            {label && !compact && (
               <span className="hidden sm:inline font-mono text-[10px] text-text-dim border-l border-white/15 pl-1.5 truncate max-w-[12rem] shrink-0">
                 {label}
               </span>
             )}
           </div>
-          <span className={cn('font-mono text-[9px] px-1.5 py-0.5 rounded border font-semibold', sourceBadge.cls)}>
-            {sourceBadge.text}
-          </span>
-          {activityGate && (
-            <span
-              className={`hidden md:inline-block font-mono text-[9px] px-1.5 py-0.5 rounded border font-semibold ${
-                activityGate === 'HIGH'
-                  ? 'bg-accent-teal/15 text-accent-teal border-accent-teal/30'
-                  : 'bg-white/5 text-text-dim border-white/15'
-              }`}
-              title="Activity gate: full pipeline on motion, keep-alive rate when idle"
-            >
-              {activityGate === 'HIGH' ? 'MOTION' : 'IDLE'}
-            </span>
-          )}
-          {lowLightBoost && (
-            <span className="hidden md:inline-block font-mono text-[9px] px-1.5 py-0.5 rounded bg-accent-yellow/15 text-accent-yellow border border-accent-yellow/30 font-semibold">
-              LOW-LIGHT BOOST
-            </span>
+          {!compact && (
+            <>
+              <span className={cn('font-mono text-[9px] px-1.5 py-0.5 rounded border font-semibold', sourceBadge.cls)}>
+                {sourceBadge.text}
+              </span>
+              {activityGate && (
+                <span
+                  className={`hidden md:inline-block font-mono text-[9px] px-1.5 py-0.5 rounded border font-semibold ${
+                    activityGate === 'HIGH'
+                      ? 'bg-accent-teal/15 text-accent-teal border-accent-teal/30'
+                      : 'bg-white/5 text-text-dim border-white/15'
+                  }`}
+                  title="Activity gate: full pipeline on motion, keep-alive rate when idle"
+                >
+                  {activityGate === 'HIGH' ? 'MOTION' : 'IDLE'}
+                </span>
+              )}
+              {lowLightBoost && (
+                <span className="hidden md:inline-block font-mono text-[9px] px-1.5 py-0.5 rounded bg-accent-yellow/15 text-accent-yellow border border-accent-yellow/30 font-semibold">
+                  LOW-LIGHT BOOST
+                </span>
+              )}
+            </>
           )}
         </div>
 
@@ -331,13 +341,13 @@ export const CameraTile: React.FC<CameraTileProps> = ({
             <span>
               FPS: <span className="text-accent-teal font-semibold">{fps}</span>
             </span>
-            {activity && (
+            {!compact && activity && (
               <>
                 <span className="text-white/20">|</span>
                 <span className="truncate">{activity}</span>
               </>
             )}
-            {detections != null && (
+            {!compact && detections != null && (
               <>
                 <span className="text-white/20">|</span>
                 <span>
@@ -346,14 +356,16 @@ export const CameraTile: React.FC<CameraTileProps> = ({
               </>
             )}
           </div>
-          <div className="flex items-center gap-2 text-[10px] text-text-muted shrink-0">
-            {zones != null && (
-              <span className={zones === 0 ? 'text-accent-yellow' : ''} title={zones === 0 ? 'No zones drawn: border scoring is inactive' : undefined}>
-                {zones} ZONE{zones === 1 ? '' : 'S'}
-              </span>
-            )}
-            {resolution && <span className="hidden sm:inline">{resolution}</span>}
-          </div>
+          {!compact && (
+            <div className="flex items-center gap-2 text-[10px] text-text-muted shrink-0">
+              {zones != null && (
+                <span className={zones === 0 ? 'text-accent-yellow' : ''} title={zones === 0 ? 'No zones drawn: border scoring is inactive' : undefined}>
+                  {zones} ZONE{zones === 1 ? '' : 'S'}
+                </span>
+              )}
+              {resolution && <span className="hidden sm:inline">{resolution}</span>}
+            </div>
+          )}
         </div>
       </div>
     </div>
