@@ -81,6 +81,28 @@ class TestBoundaryEngine(unittest.TestCase):
         self.assertEqual(engine.boundaries, [])
         self.assertEqual(engine._last_side, {})
 
+    def test_stale_tracks_are_purged_so_state_does_not_grow_forever(self):
+        """A long-running camera mints a fresh track_id for every passerby;
+        without a TTL, _last_side would grow by one entry per track_id ever
+        seen for the life of the process."""
+        clock = [0.0]
+        tmp_dir = tempfile.mkdtemp()
+        engine = BoundaryEngine(
+            config_path=str(Path(tmp_dir) / "boundaries.json"),
+            ttl_seconds=30.0,
+            now_fn=lambda: clock[0],
+        )
+        engine.add_boundary(VERTICAL_LINE)
+
+        engine.check_crossing("T1", (50, 100))
+        self.assertEqual(len(engine._last_side), 1)
+
+        clock[0] = 31.0  # past the TTL, and T1 never comes back
+        engine.check_crossing("T2", (50, 100))  # any call sweeps stale entries
+
+        self.assertNotIn(("T1", "b1"), engine._last_side)
+        self.assertIn(("T2", "b1"), engine._last_side)
+
 
 if __name__ == "__main__":
     unittest.main()

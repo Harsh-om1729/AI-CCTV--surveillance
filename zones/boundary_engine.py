@@ -15,6 +15,7 @@ a crossing happened, it does not touch ThreatScorer or AlertManager.
 import json
 import logging
 import os
+import time
 
 from zones.border_line import BorderLine
 
@@ -57,14 +58,32 @@ class BoundaryEngine:
     edited and cleared independently.
     """
 
-    def __init__(self, config_path: "str | None" = None):
+    # A track that stops crossing this boundary (left frame, went idle) must
+    # eventually drop out of `_last_side`, or a long-running camera with
+    # steady foot traffic accumulates one entry per track_id ever seen for
+    # the life of the process — unbounded memory and an ever-growing dict
+    # scanned on every frame, which is exactly the kind of thing that shows
+    # up as FPS quietly declining over a long session. 30s matches the other
+    # per-track TTLs in the pipeline (see REID_TTL_SECONDS).
+    DEFAULT_TTL_SECONDS = 30.0
+
+    def __init__(
+        self,
+        config_path: "str | None" = None,
+        ttl_seconds: float = DEFAULT_TTL_SECONDS,
+        now_fn=time.monotonic,
+    ):
         self.config_path = config_path
+        self.ttl_seconds = ttl_seconds
+        self._now = now_fn
         self.boundaries: list[Boundary] = []
-        # (track_id, boundary_id) -> last-seen signed side. A sign flip
-        # between calls is a crossing; this is the only state kept, and it
-        # is keyed on the track_id the caller already computed — no new
-        # tracking or movement logic here.
-        self._last_side: dict[tuple, float] = {}
+        # (track_id, boundary_id) -> {"side": last signed side, "seen": last
+        # time this key was touched}. A sign flip between calls is a
+        # crossing; the side is the only value the crossing logic needs, and
+        # it is keyed on the track_id the caller already computed — no new
+        # tracking or movement logic here. `seen` exists purely to let
+        # _purge_stale() evict entries for tracks that are gone for good.
+        self._last_side: dict[tuple, dict] = {}
         if self.config_path:
             self.load()
 
@@ -95,7 +114,7 @@ class BoundaryEngine:
     def remove_boundary(self, boundary_id: str) -> None:
         self.boundaries = [b for b in self.boundaries if b.id != boundary_id]
         self._last_side = {
-            key: side for key, side in self._last_side.items() if key[1] != boundary_id
+            key: entry for key, entry in self._last_side.items() if key[1] != boundary_id
         }
         self.save()
 
@@ -114,14 +133,16 @@ class BoundaryEngine:
         """
         if track_id is None:
             return []
+        now = self._now()
         events = []
         for boundary in self.boundaries:
             if not boundary.enabled:
                 continue
             key = (track_id, boundary.id)
             side = boundary.line.signed_side(point)
-            prev = self._last_side.get(key)
-            self._last_side[key] = side
+            prev_entry = self._last_side.get(key)
+            prev = prev_entry["side"] if prev_entry is not None else None
+            self._last_side[key] = {"side": side, "seen": now}
             if prev is None or prev == 0.0 or side == 0.0:
                 continue
             if (prev > 0) != (side > 0):
@@ -132,4 +153,13 @@ class BoundaryEngine:
                         "direction": "positive->negative" if side < 0 else "negative->positive",
                     }
                 )
+        self._purge_stale(now)
         return events
+
+    def _purge_stale(self, now: float) -> None:
+        stale = [
+            key for key, entry in self._last_side.items()
+            if now - entry["seen"] > self.ttl_seconds
+        ]
+        for key in stale:
+            del self._last_side[key]
