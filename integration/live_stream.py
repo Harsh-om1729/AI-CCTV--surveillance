@@ -65,6 +65,12 @@ class _LiveCamera:
         self._tracker = None
         self._thread = None
         self._stop_event = threading.Event()
+        # Guards start() specifically (see LiveCameraRegistry.acquire): the
+        # registry's own lock only protects the _cameras dict, never the
+        # actual device-open call, so requesting several different cameras
+        # at once — e.g. loading the dashboard grid — opens them concurrently
+        # instead of one at a time behind a single global lock.
+        self._start_lock = threading.Lock()
 
         self._cond = threading.Condition()
         self._latest_jpeg = None
@@ -239,6 +245,12 @@ class LiveCameraRegistry:
         sources = self._sources_provider()
         if name not in sources:
             raise KeyError(name)
+        # Only the dict lookup/insert needs the registry-wide lock — it's
+        # in-memory and fast. The device open below (cam.start(), which can
+        # take seconds) used to run *inside* this same lock, so opening
+        # camera B always waited for camera A to finish opening first, even
+        # though they're unrelated devices. A dashboard with several cameras
+        # therefore loaded them one at a time instead of together.
         with self._lock:
             cam = self._cameras.get(name)
             if cam is None:
@@ -250,13 +262,16 @@ class LiveCameraRegistry:
                     self._tracker_factory,
                 )
                 self._cameras[name] = cam
+
+        with cam._start_lock:
             if not cam.running:
                 try:
                     cam.start()
                 except CameraBusyError:
                     # Drop it so the next attempt retries cleanly instead of
                     # holding a permanently dead entry.
-                    self._cameras.pop(name, None)
+                    with self._lock:
+                        self._cameras.pop(name, None)
                     raise
             cam.viewers += 1
             cam.last_viewer_at = time.time()
